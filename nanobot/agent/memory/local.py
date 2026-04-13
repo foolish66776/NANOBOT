@@ -1,4 +1,4 @@
-"""Memory system: pure file I/O store, lightweight Consolidator, and Dream processor."""
+"""Memory system: pure file I/O store, lightweight Consolidator, Dream processor, and LocalMemory backend."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ import weakref
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
+
+from nanobot.agent.memory.base import MemoryBackend, MemoryHit, UserProfile
 
 from loguru import logger
 
@@ -764,3 +766,63 @@ class Dream:
                 logger.info("Dream commit: {}", sha)
 
         return True
+
+
+# ---------------------------------------------------------------------------
+# LocalMemory — MemoryBackend implementation backed by MemoryStore
+# ---------------------------------------------------------------------------
+
+
+class LocalMemory(MemoryBackend):
+    """File-based MemoryBackend that wraps MemoryStore.
+
+    This is the default fallback backend. It:
+    - Stores memories as entries in history.jsonl (via MemoryStore.append_history).
+    - Search is not semantic: always returns an empty list (no vector index).
+    - get_profile returns the last N history entries as dynamic facts; static is empty.
+    - forget deletes an entry from history.jsonl by cursor id.
+    - container_tag is accepted but ignored — all data lives in a single workspace.
+    """
+
+    _PROFILE_RECENT = 20
+
+    def __init__(self, workspace: Path) -> None:
+        self._store = MemoryStore(workspace)
+
+    # -- MemoryBackend interface ----------------------------------------------
+
+    async def add(
+        self,
+        content: str,
+        container_tag: str,
+        metadata: dict | None = None,
+    ) -> None:
+        self._store.append_history(content)
+
+    async def search(
+        self,
+        query: str,
+        container_tag: str,
+        limit: int = 10,
+    ) -> list[MemoryHit]:
+        # No vector search in the local backend; callers get an empty list.
+        return []
+
+    async def get_profile(self, container_tag: str) -> UserProfile:
+        entries = self._store._read_entries()
+        recent = entries[-self._PROFILE_RECENT:]
+        dynamic = [e["content"] for e in recent if e.get("content")]
+        return UserProfile(static=[], dynamic=dynamic)
+
+    async def forget(self, memory_id: str, container_tag: str) -> None:
+        try:
+            target_cursor = int(memory_id)
+        except (ValueError, TypeError):
+            logger.warning("LocalMemory.forget: invalid memory_id {!r}", memory_id)
+            return
+        entries = self._store._read_entries()
+        kept = [e for e in entries if e.get("cursor") != target_cursor]
+        if len(kept) < len(entries):
+            self._store._write_entries(kept)
+        else:
+            logger.warning("LocalMemory.forget: cursor {} not found", target_cursor)
