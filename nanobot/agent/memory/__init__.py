@@ -58,30 +58,38 @@ def build_memory_backend(config: dict, workspace=None) -> MemoryBackend:
         from nanobot.agent.memory.mem0_backend import Mem0Backend  # added in Phase 2
         mem0_cfg = dict(config.get("memory", {}).get("mem0", {}))
         # Auto-inject LLM credentials if not explicitly configured in memory.mem0.
-        # Priority: explicit llmApiKey > explicit openrouterApiKey > main nanobot provider.
-        # We do NOT auto-inject from providers.openrouter — that key may be unrelated to
-        # the active LLM and is often invalid. Use the main-agent provider instead.
+        # Priority:
+        #   1. explicit mem0.llmApiKey
+        #   2. explicit mem0.openrouterApiKey
+        #   3. OPENROUTER_API_KEY from env / ~/.nanobot/.env.local
+        #   4. main nanobot provider (key + base URL + model — last resort)
         if not mem0_cfg.get("llmApiKey") and not mem0_cfg.get("openrouterApiKey"):
-            defaults = config.get("agents", {}).get("defaults", {})
-            main_model = defaults.get("model") or defaults.get("model_override", "")
-            provider_name = _guess_provider_name(main_model, config.get("providers", {}))
-            if provider_name:
-                prov = config.get("providers", {}).get(provider_name, {})
-                api_key = prov.get("api_key") or prov.get("apiKey", "")
-                api_base = prov.get("api_base") or prov.get("apiBase")
-                if api_key:
-                    mem0_cfg["llmApiKey"] = api_key
-                    if api_base:
-                        mem0_cfg["llmBaseUrl"] = api_base
-                    else:
-                        base = _get_default_base_url(provider_name)
-                        if base:
-                            mem0_cfg["llmBaseUrl"] = base
-                    # When auto-injecting from the main provider, use its model name.
-                    # This overrides any llmModel set in mem0 config because that model
-                    # name was likely intended for a different provider (e.g. openrouter).
-                    if main_model:
-                        mem0_cfg["llmModel"] = main_model
+            from nanobot.agent.memory.mem0_backend import _env as _mem0_env
+            or_key = _mem0_env("OPENROUTER_API_KEY")
+            if or_key:
+                # OpenRouter is available — use it; _build_mem0 will set the base URL.
+                mem0_cfg["openrouterApiKey"] = or_key
+            else:
+                # Fall back to the active main-agent provider.
+                defaults = config.get("agents", {}).get("defaults", {})
+                main_model = defaults.get("model") or defaults.get("model_override", "")
+                provider_name = _guess_provider_name(main_model, config.get("providers", {}))
+                if provider_name:
+                    prov = config.get("providers", {}).get(provider_name, {})
+                    api_key = prov.get("api_key") or prov.get("apiKey", "")
+                    api_base = prov.get("api_base") or prov.get("apiBase")
+                    if api_key:
+                        mem0_cfg["llmApiKey"] = api_key
+                        if api_base:
+                            mem0_cfg["llmBaseUrl"] = api_base
+                        else:
+                            base = _get_default_base_url(provider_name)
+                            if base:
+                                mem0_cfg["llmBaseUrl"] = base
+                        # Use the main provider's model name — the llmModel in mem0 config
+                        # was likely intended for OpenRouter, not this provider.
+                        if main_model:
+                            mem0_cfg["llmModel"] = main_model
         return Mem0Backend(mem0_cfg, workspace=workspace)
 
     if backend_name == "supermemory":
