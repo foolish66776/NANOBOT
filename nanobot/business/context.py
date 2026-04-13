@@ -25,3 +25,4 @@ class BusinessContext:
     static_profile: str
     skills: list[str] = field(default_factory=lambda: ["*"])
     description: str = ""
+    model: str | None = None  # optional LLM override for this business line

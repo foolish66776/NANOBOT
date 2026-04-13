@@ -64,6 +64,7 @@ class BusinessRegistry:
                 static_profile=bl_cfg.get("staticProfile") or bl_cfg.get("static_profile", ""),
                 skills=bl_cfg.get("skills", ["*"]),
                 description=bl_cfg.get("description", ""),
+                model=bl_cfg.get("model") or None,
             )
 
         # If no business lines configured, create a minimal default.

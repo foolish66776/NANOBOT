@@ -409,7 +409,7 @@ class AgentLoop:
         result = await self.runner.run(AgentRunSpec(
             initial_messages=initial_messages,
             tools=self.tools,
-            model=self.model,
+            model=effective_model,
             max_iterations=self.max_iterations,
             max_tool_result_chars=self.max_tool_result_chars,
             hook=hook,
@@ -717,6 +717,9 @@ class AgentLoop:
         skill_names: list[str] | None = None
         if business_ctx and business_ctx.skills != ["*"]:
             skill_names = business_ctx.skills
+
+        # Business-line model override (falls back to the global default).
+        effective_model = (business_ctx.model if business_ctx and business_ctx.model else None) or self.model
 
         initial_messages = self.context.build_messages(
             history=history,

@@ -229,6 +229,7 @@ class BusinessLineConfig(Base):
     static_profile: str = ""
     skills: list[str] = Field(default_factory=lambda: ["*"])
     description: str = ""
+    model: str | None = None  # optional LLM model override (e.g. "ollama/llama3.2")
 
 
 class Config(BaseSettings):
