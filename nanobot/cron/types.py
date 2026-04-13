@@ -27,6 +27,7 @@ class CronPayload:
     deliver: bool = False
     channel: str | None = None  # e.g. "whatsapp"
     to: str | None = None  # e.g. phone number
+    business_line: str | None = None  # business line id to route the job under
 
 
 @dataclass

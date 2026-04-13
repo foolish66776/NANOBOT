@@ -6,6 +6,7 @@ import asyncio
 import re
 import time
 import unicodedata
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -27,6 +28,31 @@ from nanobot.utils.helpers import split_message
 
 TELEGRAM_MAX_MESSAGE_LEN = 4000  # Telegram message character limit
 TELEGRAM_REPLY_CONTEXT_MAX_LEN = TELEGRAM_MAX_MESSAGE_LEN  # Max length for reply context in user message
+
+# Per-handler context: tracks the active bot Application and business_line.
+# Set at the top of every message/command handler closure so all awaited methods
+# (typing, reactions, media download, …) automatically use the right bot.
+# asyncio.create_task() copies the current context, so sub-tasks (e.g. typing loop)
+# also inherit the correct value.
+_current_bot_ctx: ContextVar[dict | None] = ContextVar("_current_bot_ctx", default=None)
+# Set to True when per-bot ACL has already been checked in a multi-bot wrapper,
+# so the base-class is_allowed() check is bypassed.
+_acl_approved: ContextVar[bool] = ContextVar("_acl_approved", default=False)
+
+
+def _tg_sender_allowed(sender_id: str, allow_from: list[str]) -> bool:
+    """Check sender against a bot-specific allow_from list (id, id|username, or '*')."""
+    if not allow_from:
+        return False
+    if "*" in allow_from:
+        return True
+    sender_str = str(sender_id)
+    if sender_str in allow_from:
+        return True
+    if sender_str.count("|") == 1:
+        sid, username = sender_str.split("|", 1)
+        return sid in allow_from or username in allow_from
+    return False
 
 
 def _escape_telegram_html(text: str) -> str:
@@ -178,12 +204,23 @@ class _StreamBuf:
     stream_id: str | None = None
 
 
+class TeleBotConfig(Base):
+    """Configuration for a single bot in multi-bot mode."""
+
+    token: str = ""
+    business_line: str = ""  # injected as metadata["business_line"] on every inbound message
+    allow_from: list[str] = Field(default_factory=list)
+
+
 class TelegramConfig(Base):
     """Telegram channel configuration."""
 
     enabled: bool = False
     token: str = ""
     allow_from: list[str] = Field(default_factory=list)
+    # Multi-bot: if set, each entry spawns its own bot polling loop.
+    # Overrides top-level token/allow_from when non-empty.
+    bots: list[TeleBotConfig] = Field(default_factory=list)
     proxy: str | None = None
     reply_to_message: bool = False
     react_emoji: str = "👀"
@@ -226,18 +263,26 @@ class TelegramChannel(BaseChannel):
             config = TelegramConfig.model_validate(config)
         super().__init__(config, bus)
         self.config: TelegramConfig = config
-        self._app: Application | None = None
+        self._app: Application | None = None  # primary app (first bot or single-bot)
+        self._apps_list: list[tuple[Application, str, list[str]]] = []  # (app, business_line, allow_from)
+        self._chat_to_app: dict[str, Application] = {}  # chat_id -> app for outbound routing
+        self._app_identities: dict[int, tuple[int | None, str | None]] = {}  # id(app) -> (bot_id, username)
         self._chat_ids: dict[str, int] = {}  # Map sender_id to chat_id for replies
         self._typing_tasks: dict[str, asyncio.Task] = {}  # chat_id -> typing loop task
         self._media_group_buffers: dict[str, dict] = {}
         self._media_group_tasks: dict[str, asyncio.Task] = {}
         self._message_threads: dict[tuple[str, int], int] = {}
-        self._bot_user_id: int | None = None
-        self._bot_username: str | None = None
         self._stream_bufs: dict[str, _StreamBuf] = {}  # chat_id -> streaming state
 
     def is_allowed(self, sender_id: str) -> bool:
-        """Preserve Telegram's legacy id|username allowlist matching."""
+        """Preserve Telegram's legacy id|username allowlist matching.
+
+        In multi-bot mode the per-bot wrapper already ran ACL before calling
+        _handle_message, so we skip the redundant check via _acl_approved.
+        """
+        if _acl_approved.get():
+            return True
+
         if super().is_allowed(sender_id):
             return True
 
@@ -255,6 +300,15 @@ class TelegramChannel(BaseChannel):
 
         return sid in allow_list or username in allow_list
 
+    def _app_for_chat(self, chat_id: str) -> Application | None:
+        """Return the Application that serves *chat_id* (for outbound routing)."""
+        return self._chat_to_app.get(str(chat_id)) or self._app
+
+    def _ctx_app(self) -> Application | None:
+        """Return the Application from the current handler context (inbound path)."""
+        ctx = _current_bot_ctx.get()
+        return ctx["app"] if ctx else self._app
+
     @staticmethod
     def _normalize_telegram_command(content: str) -> str:
         """Map Telegram-safe command aliases back to canonical nanobot commands."""
@@ -266,17 +320,25 @@ class TelegramChannel(BaseChannel):
             return content.replace("/dream_restore", "/dream-restore", 1)
         return content
 
-    async def start(self) -> None:
-        """Start the Telegram bot with long polling."""
-        if not self.config.token:
-            logger.error("Telegram bot token not configured")
-            return
+    def _bot_specs(self) -> list[tuple[str, str, list[str]]]:
+        """Return list of (token, business_line, allow_from) from config.
 
-        self._running = True
+        Multi-bot mode: use config.bots (each entry is a TeleBotConfig).
+        Single-bot mode: use config.token + config.allow_from with no business_line.
+        """
+        if self.config.bots:
+            return [
+                (b.token, b.business_line, b.allow_from)
+                for b in self.config.bots
+                if b.token
+            ]
+        if self.config.token:
+            return [(self.config.token, "", list(self.config.allow_from))]
+        return []
 
+    def _build_application(self, token: str) -> Application:
+        """Build a python-telegram-bot Application for one token."""
         proxy = self.config.proxy or None
-
-        # Separate pools so long-polling (getUpdates) never starves outbound sends.
         api_request = HTTPXRequest(
             connection_pool_size=self.config.connection_pool_size,
             pool_timeout=self.config.pool_timeout,
@@ -291,74 +353,124 @@ class TelegramChannel(BaseChannel):
             read_timeout=30.0,
             proxy=proxy,
         )
-        builder = (
+        return (
             Application.builder()
-            .token(self.config.token)
+            .token(token)
             .request(api_request)
             .get_updates_request(poll_request)
-        )
-        self._app = builder.build()
-        self._app.add_error_handler(self._on_error)
-
-        # Add command handlers (using Regex to support @username suffixes before bot initialization)
-        self._app.add_handler(MessageHandler(filters.Regex(r"^/start(?:@\w+)?$"), self._on_start))
-        self._app.add_handler(
-            MessageHandler(
-                filters.Regex(r"^/(new|stop|restart|status|dream)(?:@\w+)?(?:\s+.*)?$"),
-                self._forward_command,
-            )
-        )
-        self._app.add_handler(
-            MessageHandler(
-                filters.Regex(r"^/(dream-log|dream_log|dream-restore|dream_restore)(?:@\w+)?(?:\s+.*)?$"),
-                self._forward_command,
-            )
-        )
-        self._app.add_handler(MessageHandler(filters.Regex(r"^/help(?:@\w+)?$"), self._on_help))
-
-        # Add message handler for text, photos, voice, documents, and locations
-        self._app.add_handler(
-            MessageHandler(
-                (filters.TEXT | filters.PHOTO | filters.VOICE | filters.AUDIO | filters.Document.ALL | filters.LOCATION)
-                & ~filters.COMMAND,
-                self._on_message
-            )
+            .build()
         )
 
-        logger.info("Starting Telegram bot (polling mode)...")
+    def _register_handlers(self, app: Application, business_line: str, allow_from: list[str]) -> None:
+        """Register all message handlers on *app* with bot-specific context injected."""
 
-        # Initialize and start polling
-        await self._app.initialize()
-        await self._app.start()
+        bl = business_line
+        af = allow_from
+        multi_bot = bool(self.config.bots)
 
-        # Get bot info and register command menu
-        bot_info = await self._app.bot.get_me()
-        self._bot_user_id = getattr(bot_info, "id", None)
-        self._bot_username = getattr(bot_info, "username", None)
-        logger.info("Telegram bot @{} connected", bot_info.username)
+        async def _wrap_msg(update, context):
+            """Set per-bot context vars then delegate to _on_message."""
+            _current_bot_ctx.set({"app": app, "business_line": bl})
+            if multi_bot:
+                # Per-bot ACL replaces the global is_allowed check.
+                if update.message and update.effective_user:
+                    sid = self._sender_id(update.effective_user)
+                    if not _tg_sender_allowed(sid, af):
+                        logger.warning(
+                            "Access denied for sender {} (business_line={})", sid, bl
+                        )
+                        return
+                _acl_approved.set(True)
+                # Track outbound routing for this chat.
+                if update.message:
+                    self._chat_to_app[str(update.message.chat_id)] = app
+            await self._on_message(update, context)
+
+        async def _wrap_cmd(update, context):
+            """Set per-bot context vars then delegate to _forward_command."""
+            _current_bot_ctx.set({"app": app, "business_line": bl})
+            if multi_bot:
+                if update.message and update.effective_user:
+                    sid = self._sender_id(update.effective_user)
+                    if not _tg_sender_allowed(sid, af):
+                        return
+                _acl_approved.set(True)
+                if update.message:
+                    self._chat_to_app[str(update.message.chat_id)] = app
+            await self._forward_command(update, context)
+
+        app.add_error_handler(self._on_error)
+        app.add_handler(MessageHandler(filters.Regex(r"^/start(?:@\w+)?$"), self._on_start))
+        app.add_handler(MessageHandler(
+            filters.Regex(r"^/(new|stop|restart|status|dream)(?:@\w+)?(?:\s+.*)?$"),
+            _wrap_cmd,
+        ))
+        app.add_handler(MessageHandler(
+            filters.Regex(r"^/(dream-log|dream_log|dream-restore|dream_restore)(?:@\w+)?(?:\s+.*)?$"),
+            _wrap_cmd,
+        ))
+        app.add_handler(MessageHandler(filters.Regex(r"^/help(?:@\w+)?$"), self._on_help))
+        app.add_handler(MessageHandler(
+            (filters.TEXT | filters.PHOTO | filters.VOICE | filters.AUDIO | filters.Document.ALL | filters.LOCATION)
+            & ~filters.COMMAND,
+            _wrap_msg,
+        ))
+
+    async def _run_bot(self, app: Application, business_line: str) -> None:
+        """Initialise, start polling, and run *app* until self._running is False."""
+        await app.initialize()
+        await app.start()
+
+        bot_info = await app.bot.get_me()
+        self._app_identities[id(app)] = (
+            getattr(bot_info, "id", None),
+            getattr(bot_info, "username", None),
+        )
+        suffix = f" (business_line={business_line})" if business_line else ""
+        logger.info("Telegram bot @{} connected{}", bot_info.username, suffix)
 
         try:
-            await self._app.bot.set_my_commands(self.BOT_COMMANDS)
-            logger.debug("Telegram bot commands registered")
+            await app.bot.set_my_commands(self.BOT_COMMANDS)
         except Exception as e:
             logger.warning("Failed to register bot commands: {}", e)
 
-        # Start polling (this runs until stopped)
-        await self._app.updater.start_polling(
+        await app.updater.start_polling(
             allowed_updates=["message"],
-            drop_pending_updates=False,  # Process pending messages on startup
+            drop_pending_updates=False,
             error_callback=self._on_polling_error,
         )
 
-        # Keep running until stopped
         while self._running:
             await asyncio.sleep(1)
 
+    async def start(self) -> None:
+        """Start the Telegram bot(s) with long polling."""
+        specs = self._bot_specs()
+        if not specs:
+            logger.error("Telegram: no bot token configured")
+            return
+
+        self._running = True
+
+        for token, bl, af in specs:
+            app = self._build_application(token)
+            self._register_handlers(app, bl, af)
+            self._apps_list.append((app, bl, af))
+            if self._app is None:
+                self._app = app  # backward compat: primary app is the first one
+
+        logger.info("Starting {} Telegram bot(s)...", len(self._apps_list))
+
+        # Run all bots concurrently; each _run_bot loops until _running=False.
+        await asyncio.gather(
+            *[self._run_bot(app, bl) for app, bl, _ in self._apps_list],
+            return_exceptions=True,
+        )
+
     async def stop(self) -> None:
-        """Stop the Telegram bot."""
+        """Stop all Telegram bots."""
         self._running = False
 
-        # Cancel all typing indicators
         for chat_id in list(self._typing_tasks):
             self._stop_typing(chat_id)
 
@@ -367,12 +479,17 @@ class TelegramChannel(BaseChannel):
         self._media_group_tasks.clear()
         self._media_group_buffers.clear()
 
-        if self._app:
-            logger.info("Stopping Telegram bot...")
-            await self._app.updater.stop()
-            await self._app.stop()
-            await self._app.shutdown()
-            self._app = None
+        for app, _, __ in self._apps_list:
+            try:
+                logger.info("Stopping Telegram bot...")
+                await app.updater.stop()
+                await app.stop()
+                await app.shutdown()
+            except Exception as e:
+                logger.warning("Error stopping Telegram bot: {}", e)
+
+        self._apps_list.clear()
+        self._app = None
 
     @staticmethod
     def _get_media_type(path: str) -> str:
@@ -392,7 +509,8 @@ class TelegramChannel(BaseChannel):
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through Telegram."""
-        if not self._app:
+        app = self._app_for_chat(msg.chat_id)
+        if not app:
             logger.warning("Telegram bot not running")
             return
 
@@ -431,10 +549,10 @@ class TelegramChannel(BaseChannel):
             try:
                 media_type = self._get_media_type(media_path)
                 sender = {
-                    "photo": self._app.bot.send_photo,
-                    "voice": self._app.bot.send_voice,
-                    "audio": self._app.bot.send_audio,
-                }.get(media_type, self._app.bot.send_document)
+                    "photo": app.bot.send_photo,
+                    "voice": app.bot.send_voice,
+                    "audio": app.bot.send_audio,
+                }.get(media_type, app.bot.send_document)
                 param = "photo" if media_type == "photo" else media_type if media_type in ("voice", "audio") else "document"
 
                 # Telegram Bot API accepts HTTP(S) URLs directly for media params.
@@ -461,7 +579,7 @@ class TelegramChannel(BaseChannel):
             except Exception as e:
                 filename = media_path.rsplit("/", 1)[-1]
                 logger.error("Failed to send media {}: {}", media_path, e)
-                await self._app.bot.send_message(
+                await app.bot.send_message(
                     chat_id=chat_id,
                     text=f"[Failed to send: {filename}]",
                     reply_parameters=reply_params,
@@ -475,6 +593,7 @@ class TelegramChannel(BaseChannel):
                 await self._send_text(
                     chat_id, chunk, reply_params, thread_kwargs,
                     render_as_blockquote=render_as_blockquote,
+                    app=app,
                 )
 
     async def _call_with_retry(self, fn, *args, **kwargs):
@@ -510,12 +629,14 @@ class TelegramChannel(BaseChannel):
         reply_params=None,
         thread_kwargs: dict | None = None,
         render_as_blockquote: bool = False,
+        app: Any = None,
     ) -> None:
         """Send a plain text message with HTML fallback."""
+        effective_app = app or self._app
         try:
             html = _tool_hint_to_telegram_blockquote(text) if render_as_blockquote else _markdown_to_telegram_html(text)
             await self._call_with_retry(
-                self._app.bot.send_message,
+                effective_app.bot.send_message,
                 chat_id=chat_id, text=html, parse_mode="HTML",
                 reply_parameters=reply_params,
                 **(thread_kwargs or {}),
@@ -527,7 +648,7 @@ class TelegramChannel(BaseChannel):
             logger.warning("HTML parse failed, falling back to plain text: {}", e)
             try:
                 await self._call_with_retry(
-                    self._app.bot.send_message,
+                    effective_app.bot.send_message,
                     chat_id=chat_id,
                     text=text,
                     reply_parameters=reply_params,
@@ -543,7 +664,8 @@ class TelegramChannel(BaseChannel):
 
     async def send_delta(self, chat_id: str, delta: str, metadata: dict[str, Any] | None = None) -> None:
         """Progressive message editing: send on first delta, edit on subsequent ones."""
-        if not self._app:
+        app = self._app_for_chat(chat_id)
+        if not app:
             return
         meta = metadata or {}
         int_chat_id = int(chat_id)
@@ -566,7 +688,7 @@ class TelegramChannel(BaseChannel):
             try:
                 html = _markdown_to_telegram_html(primary_text)
                 await self._call_with_retry(
-                    self._app.bot.edit_message_text,
+                    app.bot.edit_message_text,
                     chat_id=int_chat_id, message_id=buf.message_id,
                     text=html, parse_mode="HTML",
                 )
@@ -581,7 +703,7 @@ class TelegramChannel(BaseChannel):
                 logger.debug("Final stream edit failed (HTML), trying plain: {}", e)
                 try:
                     await self._call_with_retry(
-                        self._app.bot.edit_message_text,
+                        app.bot.edit_message_text,
                         chat_id=int_chat_id, message_id=buf.message_id,
                         text=primary_text,
                     )
@@ -594,7 +716,7 @@ class TelegramChannel(BaseChannel):
             # If final content exceeds Telegram limit, keep the first chunk in
             # the edited stream message and send the rest as follow-up messages.
             for extra_chunk in chunks[1:]:
-                await self._send_text(int_chat_id, extra_chunk)
+                await self._send_text(int_chat_id, extra_chunk, app=app)
             self._stream_bufs.pop(chat_id, None)
             return
 
@@ -616,7 +738,7 @@ class TelegramChannel(BaseChannel):
         if buf.message_id is None:
             try:
                 sent = await self._call_with_retry(
-                    self._app.bot.send_message,
+                    app.bot.send_message,
                     chat_id=int_chat_id, text=buf.text,
                     **thread_kwargs,
                 )
@@ -628,7 +750,7 @@ class TelegramChannel(BaseChannel):
         elif (now - buf.last_edit) >= self.config.stream_edit_interval:
             try:
                 await self._call_with_retry(
-                    self._app.bot.edit_message_text,
+                    app.bot.edit_message_text,
                     chat_id=int_chat_id, message_id=buf.message_id,
                     text=buf.text,
                 )
@@ -738,10 +860,11 @@ class TelegramChannel(BaseChannel):
         elif getattr(msg, "animation", None):
             media_file = msg.animation
             media_type = "animation"
-        if not media_file or not self._app:
+        app = self._ctx_app()
+        if not media_file or not app:
             return [], []
         try:
-            file = await self._app.bot.get_file(media_file.file_id)
+            file = await app.bot.get_file(media_file.file_id)
             ext = self._get_extension(
                 media_type,
                 getattr(media_file, "mime_type", None),
@@ -766,15 +889,18 @@ class TelegramChannel(BaseChannel):
             return [], []
 
     async def _ensure_bot_identity(self) -> tuple[int | None, str | None]:
-        """Load bot identity once and reuse it for mention/reply checks."""
-        if self._bot_user_id is not None or self._bot_username is not None:
-            return self._bot_user_id, self._bot_username
-        if not self._app:
+        """Load bot identity once per app and cache for mention/reply checks."""
+        app = self._ctx_app()
+        if not app:
             return None, None
-        bot_info = await self._app.bot.get_me()
-        self._bot_user_id = getattr(bot_info, "id", None)
-        self._bot_username = getattr(bot_info, "username", None)
-        return self._bot_user_id, self._bot_username
+        key = id(app)
+        if key not in self._app_identities:
+            bot_info = await app.bot.get_me()
+            self._app_identities[key] = (
+                getattr(bot_info, "id", None),
+                getattr(bot_info, "username", None),
+            )
+        return self._app_identities[key]
 
     @staticmethod
     def _has_mention_entity(
@@ -846,7 +972,12 @@ class TelegramChannel(BaseChannel):
         message = update.message
         user = update.effective_user
         self._remember_thread_context(message)
-        
+
+        # Track outbound routing for multi-bot (may already be set by wrapper, but safe to repeat).
+        ctx = _current_bot_ctx.get()
+        if ctx:
+            self._chat_to_app[str(message.chat_id)] = ctx["app"]
+
         # Strip @bot_username suffix if present
         content = message.text or ""
         if content.startswith("/") and "@" in content:
@@ -854,7 +985,7 @@ class TelegramChannel(BaseChannel):
             cmd_part = cmd_part.split("@")[0]
             content = f"{cmd_part} {rest[0]}" if rest else cmd_part
         content = self._normalize_telegram_command(content)
-            
+
         await self._handle_message(
             sender_id=self._sender_id(user),
             chat_id=str(message.chat_id),
@@ -922,6 +1053,10 @@ class TelegramChannel(BaseChannel):
 
         str_chat_id = str(chat_id)
         metadata = self._build_message_metadata(message, user)
+        # Inject business_line from per-bot context (multi-bot mode).
+        ctx = _current_bot_ctx.get()
+        if ctx and ctx.get("business_line"):
+            metadata["business_line"] = ctx["business_line"]
         session_key = self._derive_topic_session_key(message)
 
         # Telegram media groups: buffer briefly, forward as one aggregated turn.
@@ -988,10 +1123,11 @@ class TelegramChannel(BaseChannel):
 
     async def _add_reaction(self, chat_id: str, message_id: int, emoji: str) -> None:
         """Add emoji reaction to a message (best-effort, non-blocking)."""
-        if not self._app or not emoji:
+        app = self._ctx_app()
+        if not app or not emoji:
             return
         try:
-            await self._app.bot.set_message_reaction(
+            await app.bot.set_message_reaction(
                 chat_id=int(chat_id),
                 message_id=message_id,
                 reaction=[ReactionTypeEmoji(emoji=emoji)],
@@ -1001,10 +1137,13 @@ class TelegramChannel(BaseChannel):
 
     async def _remove_reaction(self, chat_id: str, message_id: int) -> None:
         """Remove emoji reaction from a message (best-effort, non-blocking)."""
-        if not self._app:
+        # _remove_reaction is called both from send() (outbound) and send_delta() (outbound).
+        # In the outbound path _current_bot_ctx is not set, so fall back to _app_for_chat.
+        app = self._ctx_app() or self._app_for_chat(str(chat_id))
+        if not app:
             return
         try:
-            await self._app.bot.set_message_reaction(
+            await app.bot.set_message_reaction(
                 chat_id=int(chat_id),
                 message_id=message_id,
                 reaction=[],
@@ -1013,10 +1152,15 @@ class TelegramChannel(BaseChannel):
             logger.debug("Telegram reaction removal failed: {}", e)
 
     async def _typing_loop(self, chat_id: str) -> None:
-        """Repeatedly send 'typing' action until cancelled."""
+        """Repeatedly send 'typing' action until cancelled.
+
+        asyncio.create_task copies the current context, so this task inherits
+        the _current_bot_ctx set by the handler that started the typing indicator.
+        """
+        app = self._ctx_app()
         try:
-            while self._app:
-                await self._app.bot.send_chat_action(chat_id=int(chat_id), action="typing")
+            while app:
+                await app.bot.send_chat_action(chat_id=int(chat_id), action="typing")
                 await asyncio.sleep(4)
         except asyncio.CancelledError:
             pass

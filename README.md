@@ -1988,6 +1988,85 @@ docker run -v ~/.nanobot:/home/nanobot/.nanobot --rm nanobot agent -m "Hello!"
 docker run -v ~/.nanobot:/home/nanobot/.nanobot --rm nanobot status
 ```
 
+## 🗂️ Multi-business-line usage
+
+Nanobot supports running multiple independent business lines (personal, consulting, client projects, …) from a single instance. Each line gets its own memory namespace, static system prompt fragment, and skill set.
+
+### Configuration
+
+Add `businessLines` and `defaultBusinessLine` to `~/.nanobot/config.json`:
+
+```json
+{
+  "defaultBusinessLine": "personal",
+  "businessLines": {
+    "personal": {
+      "name": "Personal",
+      "containerTag": "personal",
+      "staticProfile": "Your personal assistant context — tone, preferences, habits.",
+      "skills": ["*"]
+    },
+    "work": {
+      "name": "Work",
+      "containerTag": "work",
+      "staticProfile": "Professional context — ROI-focused, concise.",
+      "skills": ["web", "github", "calendar"]
+    }
+  }
+}
+```
+
+### Selecting a business line
+
+**CLI (one-shot):**
+```bash
+nanobot agent --business work -m "draft an email to the client"
+```
+
+**Inline marker (any channel):**
+```
+/bl:work what's our project status?
+#work what's our project status?
+```
+
+**List configured lines:**
+```bash
+nanobot business list
+nanobot business show work
+```
+
+### Cron jobs with a business line
+
+When the agent schedules a cron job, it can tag it with a business line so each run uses the correct context and memory namespace:
+
+```
+Schedule a weekly summary every Monday 9am under business line "work"
+```
+
+The agent passes `business_line="work"` automatically when creating the job.
+
+### Multi-bot Telegram
+
+Run a separate Telegram bot for each business line. All bots share the same agent and memory backend:
+
+```json
+{
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "bots": [
+        { "token": "TOKEN_A", "businessLine": "personal", "allowFrom": ["123456"] },
+        { "token": "TOKEN_B", "businessLine": "work",     "allowFrom": ["123456"] }
+      ]
+    }
+  }
+}
+```
+
+The old single-bot format (`token` + `allowFrom` at the top level) is still supported and maps to the `defaultBusinessLine`.
+
+---
+
 ## 🐧 Linux Service
 
 Run the gateway as a systemd user service so it starts automatically and restarts on failure.

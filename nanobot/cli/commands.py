@@ -737,6 +737,8 @@ def gateway(
             f"Task '{job.name}' has been triggered.\n"
             f"Scheduled instruction: {job.payload.message}"
         )
+        if job.payload.business_line:
+            reminder_note = f"/bl:{job.payload.business_line} {reminder_note}"
 
         cron_tool = agent.tools.get("cron")
         cron_token = None
