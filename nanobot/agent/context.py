@@ -32,6 +32,7 @@ class ContextBuilder:
         self,
         skill_names: list[str] | None = None,
         channel: str | None = None,
+        extra_memory_context: str | None = None,
     ) -> str:
         """Build the system prompt from identity, bootstrap files, memory, and skills."""
         parts = [self._get_identity(channel=channel)]
@@ -43,6 +44,9 @@ class ContextBuilder:
         memory = self.memory.get_memory_context()
         if memory:
             parts.append(f"# Memory\n\n{memory}")
+
+        if extra_memory_context:
+            parts.append(extra_memory_context)
 
         always_skills = self.skills.get_always_skills()
         if always_skills:
@@ -126,6 +130,7 @@ class ContextBuilder:
         chat_id: str | None = None,
         current_role: str = "user",
         session_summary: str | None = None,
+        extra_memory_context: str | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
         runtime_ctx = self._build_runtime_context(channel, chat_id, self.timezone, session_summary=session_summary)
@@ -138,7 +143,9 @@ class ContextBuilder:
         else:
             merged = [{"type": "text", "text": runtime_ctx}] + user_content
         messages = [
-            {"role": "system", "content": self.build_system_prompt(skill_names, channel=channel)},
+            {"role": "system", "content": self.build_system_prompt(
+                skill_names, channel=channel, extra_memory_context=extra_memory_context
+            )},
             *history,
         ]
         if messages[-1].get("role") == current_role:

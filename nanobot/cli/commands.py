@@ -501,6 +501,16 @@ def _load_runtime_config(config: str | None = None, workspace: str | None = None
     return loaded
 
 
+def _make_memory_backend(config: "Config") -> "Any":
+    """Create the memory backend from config."""
+    from nanobot.agent.memory import build_memory_backend
+
+    return build_memory_backend(
+        config.model_dump(mode="json", by_alias=False),
+        workspace=config.workspace_path,
+    )
+
+
 def _warn_deprecated_config_keys(config_path: Path | None) -> None:
     """Hint users to remove obsolete keys from their config file."""
     import json
@@ -572,6 +582,7 @@ def serve(
     sync_workspace_templates(runtime_config.workspace_path)
     bus = MessageBus()
     provider = _make_provider(runtime_config)
+    memory_backend = _make_memory_backend(runtime_config)
     session_manager = SessionManager(runtime_config.workspace_path)
     agent_loop = AgentLoop(
         bus=bus,
@@ -593,6 +604,8 @@ def serve(
         unified_session=runtime_config.agents.defaults.unified_session,
         disabled_skills=runtime_config.agents.defaults.disabled_skills,
         session_ttl_minutes=runtime_config.agents.defaults.session_ttl_minutes,
+        memory_backend=memory_backend,
+        memory_container_tag=runtime_config.memory.container_tag,
     )
 
     model_name = runtime_config.agents.defaults.model
@@ -655,6 +668,7 @@ def gateway(
     sync_workspace_templates(config.workspace_path)
     bus = MessageBus()
     provider = _make_provider(config)
+    memory_backend = _make_memory_backend(config)
     session_manager = SessionManager(config.workspace_path)
 
     # Preserve existing single-workspace installs, but keep custom workspaces clean.
@@ -687,6 +701,8 @@ def gateway(
         unified_session=config.agents.defaults.unified_session,
         disabled_skills=config.agents.defaults.disabled_skills,
         session_ttl_minutes=config.agents.defaults.session_ttl_minutes,
+        memory_backend=memory_backend,
+        memory_container_tag=config.memory.container_tag,
     )
 
     # Set cron callback (needs agent)
@@ -887,6 +903,7 @@ def agent(
 
     bus = MessageBus()
     provider = _make_provider(config)
+    memory_backend = _make_memory_backend(config)
 
     # Preserve existing single-workspace installs, but keep custom workspaces clean.
     if is_default_workspace(config.workspace_path):
@@ -921,6 +938,8 @@ def agent(
         unified_session=config.agents.defaults.unified_session,
         disabled_skills=config.agents.defaults.disabled_skills,
         session_ttl_minutes=config.agents.defaults.session_ttl_minutes,
+        memory_backend=memory_backend,
+        memory_container_tag=config.memory.container_tag,
     )
     restart_notice = consume_restart_notice_from_env()
     if restart_notice and should_show_cli_restart_notice(restart_notice, session_id):

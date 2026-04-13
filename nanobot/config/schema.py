@@ -208,6 +208,19 @@ class ToolsConfig(Base):
     ssrf_whitelist: list[str] = Field(default_factory=list)  # CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)
 
 
+class MemoryConfig(Base):
+    """Memory backend configuration.
+
+    backend:       "local" (default, always works) | "mem0" (Phase 2+)
+    container_tag: default namespace for memories (used until Phase 3 multi-business-line)
+    mem0:          mem0-specific sub-config (ignored when backend != "mem0")
+    """
+
+    backend: str = "local"
+    container_tag: str = "personal"
+    mem0: dict = Field(default_factory=dict)
+
+
 class Config(BaseSettings):
     """Root configuration for nanobot."""
 
@@ -217,6 +230,7 @@ class Config(BaseSettings):
     api: ApiConfig = Field(default_factory=ApiConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
 
     @property
     def workspace_path(self) -> Path:

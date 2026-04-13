@@ -16,7 +16,7 @@ from loguru import logger
 from nanobot.agent.autocompact import AutoCompact
 from nanobot.agent.context import ContextBuilder
 from nanobot.agent.hook import AgentHook, AgentHookContext, CompositeHook
-from nanobot.agent.memory import Consolidator, Dream
+from nanobot.agent.memory import Consolidator, Dream, MemoryBackend
 from nanobot.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunSpec, AgentRunner
 from nanobot.agent.subagent import SubagentManager
 from nanobot.agent.tools.cron import CronTool
@@ -154,6 +154,8 @@ class AgentLoop:
         hooks: list[AgentHook] | None = None,
         unified_session: bool = False,
         disabled_skills: list[str] | None = None,
+        memory_backend: MemoryBackend | None = None,
+        memory_container_tag: str = "personal",
     ):
         from nanobot.config.schema import ExecToolConfig, WebToolsConfig
 
@@ -202,6 +204,8 @@ class AgentLoop:
             disabled_skills=disabled_skills,
         )
         self._unified_session = unified_session
+        self._memory_backend = memory_backend
+        self._memory_container_tag = memory_container_tag
         self._running = False
         self._mcp_servers = mcp_servers or {}
         self._mcp_stacks: dict[str, AsyncExitStack] = {}
@@ -679,6 +683,13 @@ class AgentLoop:
 
         history = session.get_history(max_messages=0)
 
+        # Fetch semantic memories for this turn (non-blocking: failures return empty).
+        extra_memory_context: str | None = None
+        if self._memory_backend is not None and isinstance(msg.content, str) and msg.content.strip():
+            extra_memory_context = await _fetch_memory_context(
+                self._memory_backend, msg.content, self._memory_container_tag
+            )
+
         initial_messages = self.context.build_messages(
             history=history,
             current_message=msg.content,
@@ -686,6 +697,7 @@ class AgentLoop:
             media=msg.media if msg.media else None,
             channel=msg.channel,
             chat_id=msg.chat_id,
+            extra_memory_context=extra_memory_context,
         )
 
         async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:
@@ -736,6 +748,13 @@ class AgentLoop:
         self._clear_runtime_checkpoint(session)
         self.sessions.save(session)
         self._schedule_background(self.consolidator.maybe_consolidate_by_tokens(session))
+
+        # Store this turn in the semantic memory backend (fire-and-forget).
+        if self._memory_backend is not None and isinstance(msg.content, str) and final_content:
+            turn_text = f"User: {msg.content.strip()}\nAssistant: {final_content.strip()}"
+            self._schedule_background(
+                self._memory_backend.add(turn_text, self._memory_container_tag)
+            )
 
         # When follow-up messages were injected mid-turn, a later natural
         # language reply may address those follow-ups and should not be
@@ -966,3 +985,43 @@ class AgentLoop:
             on_stream=on_stream,
             on_stream_end=on_stream_end,
         )
+
+
+# ---------------------------------------------------------------------------
+# Module-level helpers
+# ---------------------------------------------------------------------------
+
+async def _fetch_memory_context(
+    backend: "MemoryBackend",
+    user_message: str,
+    container_tag: str,
+    search_limit: int = 6,
+) -> str | None:
+    """Fetch relevant memories and user profile; return a formatted context string.
+
+    Returns None (not empty string) when there is nothing to inject, so callers
+    can cheaply skip concatenation.
+    """
+    from nanobot.agent.memory.base import MemoryHit, UserProfile
+
+    try:
+        hits: list[MemoryHit] = await backend.search(user_message, container_tag, limit=search_limit)
+        profile: UserProfile = await backend.get_profile(container_tag)
+    except Exception:
+        logger.warning("_fetch_memory_context: backend call failed, skipping memory injection")
+        return None
+
+    parts: list[str] = []
+
+    if profile.static:
+        parts.append("## Long-term facts\n" + "\n".join(f"- {f}" for f in profile.static))
+    if profile.dynamic:
+        parts.append("## Recent context\n" + "\n".join(f"- {f}" for f in profile.dynamic))
+    if hits:
+        snippets = "\n".join(f"- {h.content}" for h in hits if h.content)
+        if snippets:
+            parts.append(f"## Relevant memories\n{snippets}")
+
+    if not parts:
+        return None
+    return "# Semantic Memory\n\n" + "\n\n".join(parts)

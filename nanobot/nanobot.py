@@ -62,9 +62,15 @@ class Nanobot:
                 Path(workspace).expanduser().resolve()
             )
 
+        from nanobot.agent.memory import build_memory_backend
+
         provider = _make_provider(config)
         bus = MessageBus()
         defaults = config.agents.defaults
+        memory_backend = build_memory_backend(
+            config.model_dump(mode="json", by_alias=False),
+            workspace=config.workspace_path,
+        )
 
         loop = AgentLoop(
             bus=bus,
@@ -84,6 +90,8 @@ class Nanobot:
             unified_session=defaults.unified_session,
             disabled_skills=defaults.disabled_skills,
             session_ttl_minutes=defaults.session_ttl_minutes,
+            memory_backend=memory_backend,
+            memory_container_tag=config.memory.container_tag,
         )
         return cls(loop)
 
