@@ -63,14 +63,14 @@ class Nanobot:
             )
 
         from nanobot.agent.memory import build_memory_backend
+        from nanobot.business.registry import BusinessRegistry
 
         provider = _make_provider(config)
         bus = MessageBus()
         defaults = config.agents.defaults
-        memory_backend = build_memory_backend(
-            config.model_dump(mode="json", by_alias=False),
-            workspace=config.workspace_path,
-        )
+        config_dict = config.model_dump(mode="json", by_alias=False)
+        memory_backend = build_memory_backend(config_dict, workspace=config.workspace_path)
+        business_registry = BusinessRegistry.from_config(config_dict)
 
         loop = AgentLoop(
             bus=bus,
@@ -92,6 +92,7 @@ class Nanobot:
             session_ttl_minutes=defaults.session_ttl_minutes,
             memory_backend=memory_backend,
             memory_container_tag=config.memory.container_tag,
+            business_registry=business_registry,
         )
         return cls(loop)
 

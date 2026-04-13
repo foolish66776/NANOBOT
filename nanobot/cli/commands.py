@@ -511,6 +511,13 @@ def _make_memory_backend(config: "Config") -> "Any":
     )
 
 
+def _make_business_registry(config: "Config") -> "Any":
+    """Create the BusinessRegistry from config."""
+    from nanobot.business.registry import BusinessRegistry
+
+    return BusinessRegistry.from_config(config.model_dump(mode="json", by_alias=False))
+
+
 def _warn_deprecated_config_keys(config_path: Path | None) -> None:
     """Hint users to remove obsolete keys from their config file."""
     import json
@@ -583,6 +590,7 @@ def serve(
     bus = MessageBus()
     provider = _make_provider(runtime_config)
     memory_backend = _make_memory_backend(runtime_config)
+    business_registry = _make_business_registry(runtime_config)
     session_manager = SessionManager(runtime_config.workspace_path)
     agent_loop = AgentLoop(
         bus=bus,
@@ -606,6 +614,7 @@ def serve(
         session_ttl_minutes=runtime_config.agents.defaults.session_ttl_minutes,
         memory_backend=memory_backend,
         memory_container_tag=runtime_config.memory.container_tag,
+        business_registry=business_registry,
     )
 
     model_name = runtime_config.agents.defaults.model
@@ -669,6 +678,7 @@ def gateway(
     bus = MessageBus()
     provider = _make_provider(config)
     memory_backend = _make_memory_backend(config)
+    business_registry = _make_business_registry(config)
     session_manager = SessionManager(config.workspace_path)
 
     # Preserve existing single-workspace installs, but keep custom workspaces clean.
@@ -703,6 +713,7 @@ def gateway(
         session_ttl_minutes=config.agents.defaults.session_ttl_minutes,
         memory_backend=memory_backend,
         memory_container_tag=config.memory.container_tag,
+        business_registry=business_registry,
     )
 
     # Set cron callback (needs agent)
@@ -890,6 +901,7 @@ def agent(
     config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
     markdown: bool = typer.Option(True, "--markdown/--no-markdown", help="Render assistant output as Markdown"),
     logs: bool = typer.Option(False, "--logs/--no-logs", help="Show nanobot runtime logs during chat"),
+    business: str | None = typer.Option(None, "--business", "-b", help="Business line ID (e.g. personal, concr3tica)"),
 ):
     """Interact with the agent directly."""
     from loguru import logger
@@ -904,6 +916,7 @@ def agent(
     bus = MessageBus()
     provider = _make_provider(config)
     memory_backend = _make_memory_backend(config)
+    business_registry = _make_business_registry(config)
 
     # Preserve existing single-workspace installs, but keep custom workspaces clean.
     if is_default_workspace(config.workspace_path):
@@ -940,6 +953,7 @@ def agent(
         session_ttl_minutes=config.agents.defaults.session_ttl_minutes,
         memory_backend=memory_backend,
         memory_container_tag=config.memory.container_tag,
+        business_registry=business_registry,
     )
     restart_notice = consume_restart_notice_from_env()
     if restart_notice and should_show_cli_restart_notice(restart_notice, session_id):
@@ -959,12 +973,28 @@ def agent(
             return
         _print_cli_progress_line(content, _thinking)
 
+    # Show active business line on startup if explicitly set.
+    if business:
+        resolved = business_registry.get(business)
+        if resolved is None:
+            known = ", ".join(c.id for c in business_registry.list())
+            console.print(
+                f"[yellow]Warning:[/yellow] unknown business line '{business}'. "
+                f"Known: {known}. Falling back to default."
+            )
+            business = None
+        else:
+            console.print(f"[dim]Business: {resolved.name} ({resolved.container_tag})[/dim]")
+
     if message:
         # Single message mode — direct call, no bus needed
+        # Prefix business line marker so the registry can strip it cleanly.
+        effective_msg = f"/bl:{business} {message}" if business else message
+
         async def run_once():
             renderer = StreamRenderer(render_markdown=markdown)
             response = await agent_loop.process_direct(
-                message, session_id,
+                effective_msg, session_id,
                 on_progress=_cli_progress,
                 on_stream=renderer.on_delta,
                 on_stream_end=renderer.on_end,
@@ -1082,12 +1112,16 @@ def agent(
                         turn_response.clear()
                         renderer = StreamRenderer(render_markdown=markdown)
 
+                        inbound_meta: dict = {"_wants_stream": True}
+                        if business:
+                            inbound_meta["business_line"] = business
+
                         await bus.publish_inbound(InboundMessage(
                             channel=cli_channel,
                             sender_id="user",
                             chat_id=cli_chat_id,
                             content=user_input,
-                            metadata={"_wants_stream": True},
+                            metadata=inbound_meta,
                         ))
 
                         await turn_done.wait()
@@ -1348,6 +1382,79 @@ def status():
 
 provider_app = typer.Typer(help="Manage providers")
 app.add_typer(provider_app, name="provider")
+
+
+# ============================================================================
+# Business context commands
+# ============================================================================
+
+business_app = typer.Typer(help="Manage business lines.", no_args_is_help=True)
+app.add_typer(business_app, name="business")
+
+
+@business_app.command("list")
+def business_list(
+    config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+):
+    """List all configured business lines."""
+    cfg = _load_runtime_config(config, workspace)
+    from nanobot.business.registry import BusinessRegistry
+
+    registry = BusinessRegistry.from_config(cfg.model_dump(mode="json", by_alias=False))
+    lines = registry.list()
+
+    if not lines:
+        console.print("[yellow]No business lines configured.[/yellow]")
+        return
+
+    from rich.table import Table
+
+    table = Table(title="Business Lines", show_header=True, header_style="bold cyan")
+    table.add_column("ID", style="bold")
+    table.add_column("Name")
+    table.add_column("Container Tag")
+    table.add_column("Skills")
+    table.add_column("Default", justify="center")
+
+    default_id = registry.default_id
+    for ctx in lines:
+        skills_str = ", ".join(ctx.skills) if ctx.skills != ["*"] else "*"
+        is_default = "✓" if ctx.id == default_id else ""
+        table.add_row(ctx.id, ctx.name, ctx.container_tag, skills_str, is_default)
+
+    console.print(table)
+
+
+@business_app.command("show")
+def business_show(
+    bl_id: str = typer.Argument(help="Business line ID to show"),
+    config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+):
+    """Show details of a business line including its static profile."""
+    cfg = _load_runtime_config(config, workspace)
+    from nanobot.business.registry import BusinessRegistry
+
+    registry = BusinessRegistry.from_config(cfg.model_dump(mode="json", by_alias=False))
+    ctx = registry.get(bl_id)
+    if ctx is None:
+        known = ", ".join(c.id for c in registry.list())
+        console.print(f"[red]Business line '{bl_id}' not found. Known: {known}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"\n[bold cyan]Business Line:[/bold cyan] {ctx.name} ({ctx.id})")
+    console.print(f"[cyan]Container Tag:[/cyan] {ctx.container_tag}")
+    skills_str = ", ".join(ctx.skills) if ctx.skills != ["*"] else "* (all skills)"
+    console.print(f"[cyan]Skills:[/cyan] {skills_str}")
+    if ctx.description:
+        console.print(f"[cyan]Description:[/cyan] {ctx.description}")
+    console.print(f"\n[bold]Static Profile:[/bold]")
+    if ctx.static_profile:
+        console.print(ctx.static_profile)
+    else:
+        console.print("[dim](not configured)[/dim]")
+    console.print()
 
 
 _LOGIN_HANDLERS: dict[str, callable] = {}

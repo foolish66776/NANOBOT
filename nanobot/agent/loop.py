@@ -17,6 +17,7 @@ from nanobot.agent.autocompact import AutoCompact
 from nanobot.agent.context import ContextBuilder
 from nanobot.agent.hook import AgentHook, AgentHookContext, CompositeHook
 from nanobot.agent.memory import Consolidator, Dream, MemoryBackend
+from nanobot.business.registry import BusinessRegistry
 from nanobot.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunSpec, AgentRunner
 from nanobot.agent.subagent import SubagentManager
 from nanobot.agent.tools.cron import CronTool
@@ -156,6 +157,7 @@ class AgentLoop:
         disabled_skills: list[str] | None = None,
         memory_backend: MemoryBackend | None = None,
         memory_container_tag: str = "personal",
+        business_registry: BusinessRegistry | None = None,
     ):
         from nanobot.config.schema import ExecToolConfig, WebToolsConfig
 
@@ -206,6 +208,7 @@ class AgentLoop:
         self._unified_session = unified_session
         self._memory_backend = memory_backend
         self._memory_container_tag = memory_container_tag
+        self._business_registry = business_registry
         self._running = False
         self._mcp_servers = mcp_servers or {}
         self._mcp_stacks: dict[str, AsyncExitStack] = {}
@@ -683,20 +686,46 @@ class AgentLoop:
 
         history = session.get_history(max_messages=0)
 
+        # Resolve BusinessContext for this turn (strips markers from message).
+        business_ctx = None
+        effective_message = msg.content
+        effective_container_tag = self._memory_container_tag
+        if self._business_registry is not None and isinstance(msg.content, str):
+            bl_override = (msg.metadata or {}).get("business_line")
+            business_ctx, effective_message = self._business_registry.resolve(
+                msg.content,
+                override_id=bl_override,
+            )
+            effective_container_tag = business_ctx.container_tag
+
         # Fetch semantic memories for this turn (non-blocking: failures return empty).
         extra_memory_context: str | None = None
         if self._memory_backend is not None and isinstance(msg.content, str) and msg.content.strip():
             extra_memory_context = await _fetch_memory_context(
-                self._memory_backend, msg.content, self._memory_container_tag
+                self._memory_backend, effective_message or msg.content, effective_container_tag
             )
+
+        # Prepend the static profile if the business context defines one.
+        if business_ctx and business_ctx.static_profile:
+            profile_block = f"# Business Context: {business_ctx.name}\n\n{business_ctx.static_profile}"
+            if extra_memory_context:
+                extra_memory_context = f"{profile_block}\n\n---\n\n{extra_memory_context}"
+            else:
+                extra_memory_context = profile_block
+
+        # Determine skill names to activate for this context.
+        skill_names: list[str] | None = None
+        if business_ctx and business_ctx.skills != ["*"]:
+            skill_names = business_ctx.skills
 
         initial_messages = self.context.build_messages(
             history=history,
-            current_message=msg.content,
+            current_message=effective_message if self._business_registry else msg.content,
             session_summary=pending,
             media=msg.media if msg.media else None,
             channel=msg.channel,
             chat_id=msg.chat_id,
+            skill_names=skill_names,
             extra_memory_context=extra_memory_context,
         )
 
@@ -751,9 +780,10 @@ class AgentLoop:
 
         # Store this turn in the semantic memory backend (fire-and-forget).
         if self._memory_backend is not None and isinstance(msg.content, str) and final_content:
-            turn_text = f"User: {msg.content.strip()}\nAssistant: {final_content.strip()}"
+            stored_msg = effective_message if self._business_registry else msg.content
+            turn_text = f"User: {stored_msg.strip()}\nAssistant: {final_content.strip()}"
             self._schedule_background(
-                self._memory_backend.add(turn_text, self._memory_container_tag)
+                self._memory_backend.add(turn_text, effective_container_tag)
             )
 
         # When follow-up messages were injected mid-turn, a later natural

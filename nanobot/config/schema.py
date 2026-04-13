@@ -221,6 +221,16 @@ class MemoryConfig(Base):
     mem0: dict = Field(default_factory=dict)
 
 
+class BusinessLineConfig(Base):
+    """Configuration for a single business line."""
+
+    name: str = ""
+    container_tag: str = ""
+    static_profile: str = ""
+    skills: list[str] = Field(default_factory=lambda: ["*"])
+    description: str = ""
+
+
 class Config(BaseSettings):
     """Root configuration for nanobot."""
 
@@ -231,6 +241,14 @@ class Config(BaseSettings):
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    business_lines: dict[str, BusinessLineConfig] = Field(
+        default_factory=dict,
+        alias="businessLines",
+    )
+    default_business_line: str = Field(
+        default="personal",
+        alias="defaultBusinessLine",
+    )
 
     @property
     def workspace_path(self) -> Path:
