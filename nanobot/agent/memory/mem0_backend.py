@@ -223,10 +223,11 @@ class Mem0Backend(MemoryBackend):
                 agent_id=container_tag,
                 metadata=metadata,
             )
-        except Exception:
+        except Exception as exc:
             logger.warning(
-                "Mem0Backend.add failed (container={}); memory not stored",
+                "Mem0Backend.add failed (container={}); memory not stored: {}",
                 container_tag,
+                exc,
             )
 
     async def search(
@@ -253,11 +254,12 @@ class Mem0Backend(MemoryBackend):
                 )
                 for h in hits
             ]
-        except Exception:
+        except Exception as exc:
             logger.warning(
-                "Mem0Backend.search failed (query={!r}, container={}); returning []",
+                "Mem0Backend.search failed (query={!r}, container={}); returning []: {}",
                 query[:60],
                 container_tag,
+                exc,
             )
             return []
 
@@ -282,10 +284,11 @@ class Mem0Backend(MemoryBackend):
                 dynamic = contents
 
             return UserProfile(static=static, dynamic=dynamic)
-        except Exception:
+        except Exception as exc:
             logger.warning(
-                "Mem0Backend.get_profile failed (container={}); returning empty profile",
+                "Mem0Backend.get_profile failed (container={}); returning empty profile: {}",
                 container_tag,
+                exc,
             )
             return UserProfile()
 
