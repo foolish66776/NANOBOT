@@ -75,6 +75,8 @@ class ChannelManager:
 
     def _validate_allow_from(self) -> None:
         for name, ch in self.channels.items():
+            if getattr(ch.config, "bots", None):
+                continue  # multi-bot mode: per-bot allowFrom takes precedence
             if getattr(ch.config, "allow_from", None) == []:
                 raise SystemExit(
                     f'Error: "{name}" has empty allowFrom (denies all). '
