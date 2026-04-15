@@ -110,6 +110,11 @@ class Mem0Backend(MemoryBackend):
             raise
         return self._mem
 
+    def _reset_mem0(self) -> None:
+        """Drop the cached instance so the next call rebuilds it (after connection loss)."""
+        self._mem = None
+        self._init_error = None
+
     def _build_mem0(self) -> Any:
         """Build and return the AsyncMemory instance."""
         from mem0 import AsyncMemory
@@ -175,10 +180,24 @@ class Mem0Backend(MemoryBackend):
         )
 
         # --- vector store: pgvector ---
+        # Railway proxy drops idle TCP connections after ~60s.
+        # Pass TCP keepalive params in the DSN so the pool detects and
+        # recovers dead connections instead of hanging on timeout.
+        keepalive_params = (
+            "?keepalives=1"
+            "&keepalives_idle=30"
+            "&keepalives_interval=10"
+            "&keepalives_count=5"
+        )
+        db_url_with_keepalive = (
+            database_url + keepalive_params
+            if "?" not in database_url
+            else database_url + keepalive_params.replace("?", "&")
+        )
         vector_store_config = {
             "provider": "pgvector",
             "config": {
-                "connection_string": database_url,
+                "connection_string": db_url_with_keepalive,
                 "collection_name": self._collection_name,
                 "embedding_model_dims": CohereEmbedder.EMBEDDING_DIMS,
                 "diskann": False,
@@ -215,20 +234,26 @@ class Mem0Backend(MemoryBackend):
         container_tag: str,
         metadata: dict | None = None,
     ) -> None:
-        try:
-            mem = self._ensure_mem0()
-            await mem.add(
-                content,
-                user_id=self._user_id,
-                agent_id=container_tag,
-                metadata=metadata,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Mem0Backend.add failed (container={}); memory not stored: {}",
-                container_tag,
-                exc,
-            )
+        for attempt in range(2):
+            try:
+                mem = self._ensure_mem0()
+                await mem.add(
+                    content,
+                    user_id=self._user_id,
+                    agent_id=container_tag,
+                    metadata=metadata,
+                )
+                return
+            except Exception as exc:
+                if attempt == 0 and _is_connection_error(exc):
+                    logger.warning("Mem0Backend.add: connection lost, rebuilding pool...")
+                    self._reset_mem0()
+                    continue
+                logger.warning(
+                    "Mem0Backend.add failed (container={}); memory not stored: {}",
+                    container_tag,
+                    exc,
+                )
 
     async def search(
         self,
@@ -236,61 +261,69 @@ class Mem0Backend(MemoryBackend):
         container_tag: str,
         limit: int = 10,
     ) -> list[MemoryHit]:
-        try:
-            mem = self._ensure_mem0()
-            result = await mem.search(
-                query,
-                user_id=self._user_id,
-                agent_id=container_tag,
-                limit=limit,
-            )
-            hits = result.get("results") if isinstance(result, dict) else (result or [])
-            return [
-                MemoryHit(
-                    content=h.get("memory", ""),
-                    score=h.get("score", 1.0),
-                    memory_id=h.get("id"),
-                    metadata=h.get("metadata") or {},
+        for attempt in range(2):
+            try:
+                mem = self._ensure_mem0()
+                result = await mem.search(
+                    query,
+                    user_id=self._user_id,
+                    agent_id=container_tag,
+                    limit=limit,
                 )
-                for h in hits
-            ]
-        except Exception as exc:
-            logger.warning(
-                "Mem0Backend.search failed (query={!r}, container={}); returning []: {}",
-                query[:60],
-                container_tag,
-                exc,
-            )
-            return []
+                hits = result.get("results") if isinstance(result, dict) else (result or [])
+                return [
+                    MemoryHit(
+                        content=h.get("memory", ""),
+                        score=h.get("score", 1.0),
+                        memory_id=h.get("id"),
+                        metadata=h.get("metadata") or {},
+                    )
+                    for h in hits
+                ]
+            except Exception as exc:
+                if attempt == 0 and _is_connection_error(exc):
+                    logger.warning("Mem0Backend.search: connection lost, rebuilding pool...")
+                    self._reset_mem0()
+                    continue
+                logger.warning(
+                    "Mem0Backend.search failed (query={!r}, container={}); returning []: {}",
+                    query[:60],
+                    container_tag,
+                    exc,
+                )
+                return []
 
     async def get_profile(self, container_tag: str) -> UserProfile:
-        try:
-            mem = self._ensure_mem0()
-            result = await mem.get_all(
-                user_id=self._user_id,
-                agent_id=container_tag,
-                limit=_PROFILE_RECENT + _PROFILE_STATIC,
-            )
-            entries = result.get("results") if isinstance(result, dict) else (result or [])
-            contents = [e.get("memory", "") for e in entries if e.get("memory")]
+        for attempt in range(2):
+            try:
+                mem = self._ensure_mem0()
+                result = await mem.get_all(
+                    user_id=self._user_id,
+                    agent_id=container_tag,
+                    limit=_PROFILE_RECENT + _PROFILE_STATIC,
+                )
+                entries = result.get("results") if isinstance(result, dict) else (result or [])
+                contents = [e.get("memory", "") for e in entries if e.get("memory")]
 
-            # Heuristic split: oldest entries → static (stable facts),
-            # most recent N → dynamic (recent context)
-            if len(contents) > _PROFILE_RECENT:
-                static = contents[:-_PROFILE_RECENT][-_PROFILE_STATIC:]
-                dynamic = contents[-_PROFILE_RECENT:]
-            else:
-                static = []
-                dynamic = contents
+                if len(contents) > _PROFILE_RECENT:
+                    static = contents[:-_PROFILE_RECENT][-_PROFILE_STATIC:]
+                    dynamic = contents[-_PROFILE_RECENT:]
+                else:
+                    static = []
+                    dynamic = contents
 
-            return UserProfile(static=static, dynamic=dynamic)
-        except Exception as exc:
-            logger.warning(
-                "Mem0Backend.get_profile failed (container={}); returning empty profile: {}",
-                container_tag,
-                exc,
-            )
-            return UserProfile()
+                return UserProfile(static=static, dynamic=dynamic)
+            except Exception as exc:
+                if attempt == 0 and _is_connection_error(exc):
+                    logger.warning("Mem0Backend.get_profile: connection lost, rebuilding pool...")
+                    self._reset_mem0()
+                    continue
+                logger.warning(
+                    "Mem0Backend.get_profile failed (container={}); returning empty profile: {}",
+                    container_tag,
+                    exc,
+                )
+                return UserProfile()
 
     async def forget(self, memory_id: str, container_tag: str) -> None:
         try:
@@ -307,6 +340,21 @@ class Mem0Backend(MemoryBackend):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _is_connection_error(exc: Exception) -> bool:
+    """Return True if the exception looks like a lost DB connection."""
+    msg = str(exc).lower()
+    return any(kw in msg for kw in (
+        "connection timed out",
+        "connection refused",
+        "broken pipe",
+        "server closed the connection",
+        "ssl connection has been closed",
+        "could not connect",
+        "operational error",
+        "pool exhausted",
+    ))
+
 
 def _env(key: str) -> str | None:
     """Read from env, also loading ~/.nanobot/.env.local if not already loaded."""
