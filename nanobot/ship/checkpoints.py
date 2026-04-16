@@ -70,7 +70,7 @@ async def validate_spec(
         parts += ["\n\n---\n\n# Personas cliente (business line)\n\n", business_personas]
     user = "".join(parts)
 
-    report = await r.complete(role="validate_spec", system=system, user=user, max_tokens=2000)
+    report = await r.complete(role="validate_spec", system=system, user=user, max_tokens=4000)
 
     verdict = _extract_verdict(
         report,
@@ -104,7 +104,7 @@ async def review_workflow(
         f"\n\nVerifica la conformità seguendo le istruzioni del tuo sistema."
     )
 
-    report = await r.complete(role="review_workflow", system=system, user=user, max_tokens=2000)
+    report = await r.complete(role="review_workflow", system=system, user=user, max_tokens=4000)
 
     verdict = _extract_verdict(report, ["APPROVABILE", "DA RIFARE", "STOP"])
     logger.info("review-workflow verdetto: {}", verdict)
@@ -133,4 +133,4 @@ async def weekly_audit(
         "Analizza la salute dei workflow attivi e produci il report settimanale.\n\n"
         f"# Dati workflow\n\n{workflows_summary}"
     )
-    return await r.complete(role="weekly_audit", system=system, user=user, max_tokens=2000)
+    return await r.complete(role="weekly_audit", system=system, user=user, max_tokens=4000)
