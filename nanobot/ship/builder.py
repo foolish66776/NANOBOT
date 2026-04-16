@@ -101,7 +101,7 @@ async def build_workflow(
             role="build",
             system=_BUILD_SYSTEM,
             user=user_prompt,
-            max_tokens=4000,
+            max_tokens=8000,
         )
 
         # Prova a parsare il JSON (il modello potrebbe includere markdown)

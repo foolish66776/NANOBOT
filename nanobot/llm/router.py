@@ -119,7 +119,7 @@ class LLMRouter:
             os.environ.get("NANOBOT_LLM_LOG", "~/.nanobot/logs/llm-routing.log")
         )
     )
-    timeout: float = 60.0
+    timeout: float = 180.0
 
     # -----------------------------------------------------------------------
     # Public interface
