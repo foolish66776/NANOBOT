@@ -48,13 +48,25 @@ class _FsTool(Tool):
         workspace: Path | None = None,
         allowed_dir: Path | None = None,
         extra_allowed_dirs: list[Path] | None = None,
+        legacy_workspace: Path | None = None,
     ):
         self._workspace = workspace
         self._allowed_dir = allowed_dir
         self._extra_allowed_dirs = extra_allowed_dirs
+        self._legacy_workspace = legacy_workspace.expanduser().resolve() if legacy_workspace else None
 
     def _resolve(self, path: str) -> Path:
         return _resolve_path(path, self._workspace, self._allowed_dir, self._extra_allowed_dirs)
+
+    def _guard_legacy_write(self, resolved: Path) -> str | None:
+        """Return error string if path is inside the frozen legacy workspace."""
+        if self._legacy_workspace and _is_under(resolved, self._legacy_workspace):
+            return (
+                f"Error: Write blocked — path '{resolved}' is inside the legacy workspace "
+                f"'{self._legacy_workspace}' which is frozen (read-only). "
+                "Write to ~/dev/nanobot-workspace/ instead."
+            )
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +299,8 @@ class WriteFileTool(_FsTool):
             if content is None:
                 raise ValueError("Unknown content")
             fp = self._resolve(path)
+            if err := self._guard_legacy_write(fp):
+                return err
             fp.parent.mkdir(parents=True, exist_ok=True)
             fp.write_text(content, encoding="utf-8")
             file_state.record_write(fp)
@@ -617,6 +631,8 @@ class EditFileTool(_FsTool):
                 return "Error: This is a Jupyter notebook. Use the notebook_edit tool instead of edit_file."
 
             fp = self._resolve(path)
+            if err := self._guard_legacy_write(fp):
+                return err
 
             # Create-file semantics: old_text='' + file doesn't exist → create
             if not fp.exists():
