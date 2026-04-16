@@ -66,7 +66,7 @@ class N8nClient:
     async def activate_workflow(self, workflow_id: str) -> bool:
         """Attiva un workflow esistente. Ritorna True se OK."""
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.patch(
+            resp = await client.post(
                 f"{self.base_url}/api/v1/workflows/{workflow_id}/activate",
                 headers=self._headers,
             )
@@ -103,9 +103,9 @@ class N8nClient:
         """Esegue manualmente un workflow e restituisce l'oggetto execution."""
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
-                f"{self.base_url}/api/v1/workflows/{workflow_id}/run",
+                f"{self.base_url}/api/v1/executions",
                 headers=self._headers,
-                json={},
+                json={"workflowId": workflow_id},
             )
         if resp.status_code not in (200, 201):
             raise RuntimeError(f"Run workflow {workflow_id} fallito {resp.status_code}: {resp.text[:400]}")
