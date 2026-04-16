@@ -10,7 +10,7 @@ Roles:
     conversation        → MiniMax M2 (API ufficiale)
     build               → MiniMax M2 (generazione workflow JSON)
     council_persona     → dipende dalla persona (vedi PERSONA_ROUTES)
-    council_judge       → Claude Opus (Anthropic primario, OR fallback)
+    council_judge       → DeepSeek V3.2 (OpenRouter)
     validate_spec       → Claude Opus (Anthropic primario, OR fallback)
     review_workflow     → Claude Opus (Anthropic primario, OR fallback)
     weekly_audit        → Claude Opus (Anthropic primario, OR fallback)
@@ -42,14 +42,15 @@ _OR_GPT4O = "openai/gpt-4o"
 _OR_GEMINI = "google/gemini-2.5-pro"
 _OR_GROK = "x-ai/grok-4"
 _OR_DEEPSEEK = "deepseek/deepseek-chat-v3-0324"  # fallback se Grok non disponibile
+_OR_DEEPSEEK_V32 = "deepseek/deepseek-v3.2"       # council personas + judge
 
 # Mapping persona → (primary_api, primary_model, fallback_api, fallback_model)
 # primary_api: "anthropic" | "openrouter"
 PERSONA_ROUTES: dict[str, dict] = {
     "voce-cliente": {
-        "api": "anthropic",
-        "model": _ANTHROPIC_SONNET,
-        "or_model": _OR_SONNET,
+        "api": "openrouter",
+        "model": _OR_DEEPSEEK_V32,
+        "or_model": _OR_DEEPSEEK_V32,
     },
     "vc-unicorni": {
         "api": "openrouter",
@@ -67,19 +68,19 @@ PERSONA_ROUTES: dict[str, dict] = {
         "or_model": _OR_DEEPSEEK,  # fallback automatico se Grok non disponibile
     },
     "jobs": {
-        "api": "anthropic",
-        "model": _ANTHROPIC_OPUS,
-        "or_model": _OR_OPUS,
+        "api": "openrouter",
+        "model": _OR_DEEPSEEK_V32,
+        "or_model": _OR_DEEPSEEK_V32,
     },
     "munger": {
-        "api": "anthropic",
-        "model": _ANTHROPIC_SONNET,
-        "or_model": _OR_SONNET,
+        "api": "openrouter",
+        "model": _OR_DEEPSEEK_V32,
+        "or_model": _OR_DEEPSEEK_V32,
     },
     "giudice": {
-        "api": "anthropic",
-        "model": _ANTHROPIC_OPUS,
-        "or_model": _OR_OPUS,
+        "api": "openrouter",
+        "model": _OR_DEEPSEEK_V32,
+        "or_model": _OR_DEEPSEEK_V32,
     },
 }
 
@@ -87,7 +88,7 @@ SUPERVISOR_ROUTES: dict[str, dict] = {
     "validate_spec": {"api": "anthropic", "model": _ANTHROPIC_OPUS, "or_model": _OR_OPUS},
     "review_workflow": {"api": "anthropic", "model": _ANTHROPIC_OPUS, "or_model": _OR_OPUS},
     "weekly_audit": {"api": "anthropic", "model": _ANTHROPIC_OPUS, "or_model": _OR_OPUS},
-    "council_judge": {"api": "anthropic", "model": _ANTHROPIC_OPUS, "or_model": _OR_OPUS},
+    "council_judge": {"api": "openrouter", "model": _OR_DEEPSEEK_V32, "or_model": _OR_DEEPSEEK_V32},
     # build: MiniMax M2 per generazione workflow JSON (CLAUDE.md §7.2 Step 2)
     "build": {"api": "minimax"},
 }
