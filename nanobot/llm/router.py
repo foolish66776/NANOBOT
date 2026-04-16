@@ -115,7 +115,7 @@ class LLMRouter:
         default_factory=lambda: os.environ.get("MINIMAX_GROUP_ID", "")
     )
     minimax_model: str = field(
-        default_factory=lambda: os.environ.get("MINIMAX_DEFAULT_MODEL", "minimax-m2")
+        default_factory=lambda: os.environ.get("MINIMAX_DEFAULT_MODEL", "minimax/minimax-m2.7")
     )
     llm_log_path: str = field(
         default_factory=lambda: os.path.expanduser(
@@ -342,7 +342,8 @@ class LLMRouter:
         base = self.minimax_base_url.rstrip("/")
         url = f"{base}/v1/text/chatcompletion_v2"
 
-        # Normalizza il model name (rimuove prefisso "minimax/" se presente)
+        # L'API ufficiale MiniMax si aspetta il nome senza prefisso "minimax/"
+        # (es. "minimax-m2.7"), mentre la env var usa la forma "minimax/minimax-m2.7"
         model = self.minimax_model
         if model.startswith("minimax/"):
             model = model[len("minimax/"):]
