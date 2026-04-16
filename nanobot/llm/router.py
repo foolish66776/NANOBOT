@@ -277,6 +277,9 @@ class LLMRouter:
             raise _RateLimitError(resp.text)
         if resp.status_code >= 500:
             raise _ServerError(f"{resp.status_code}: {resp.text}")
+        if resp.status_code in (400, 402, 403):
+            # credit balance too low, payment required, forbidden → fallback to OR
+            raise _AuthError(f"{resp.status_code}: {resp.text[:200]}")
         if resp.status_code != 200:
             raise RuntimeError(f"Anthropic unexpected {resp.status_code}: {resp.text[:300]}")
 
