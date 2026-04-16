@@ -167,10 +167,10 @@ class ShipPipeline:
         try:
             created = await self.n8n.import_workflow(dryrun_wf)
             tmp_id = str(created.get("id", ""))
-            self._p(f"Workflow dry-run importato (id: {tmp_id}). Esecuzione in corso...")
-
-            exec_result = await self.n8n.run_workflow(tmp_id)
-            log = _format_dryrun_log(spec, exec_result)
+            self._p(f"Workflow dry-run importato con successo (id: {tmp_id}).")
+            # I workflow cron non hanno un endpoint REST trigger in n8n —
+            # il dry-run verifica solo che il JSON sia importabile correttamente.
+            log = _format_dryrun_log(spec, {"id": tmp_id, "status": "imported"})
 
         except Exception as exc:
             log = f"Dry-run fallito: {exc}"
