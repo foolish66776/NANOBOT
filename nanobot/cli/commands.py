@@ -1459,6 +1459,147 @@ def business_show(
     console.print()
 
 
+# ============================================================================
+# Council commands
+# ============================================================================
+
+council_app = typer.Typer(help="LLM Council — valutazione workflow spec.", no_args_is_help=True)
+app.add_typer(council_app, name="council")
+
+
+@council_app.command("run")
+def council_run(
+    spec_id: str = typer.Argument(help="ID della spec (es. 2026-04-16-morning-brief)"),
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Override workspace path"),
+):
+    """Lancia il Council LLM su una spec in status 'draft'.
+
+    Il Council chiama 6 personas in parallelo (max 90s), poi sintetizza con il giudice.
+    Salva il report in <business>/specs/<spec-id>.council.md e aggiorna lo status a council-pending.
+    """
+    import asyncio as _asyncio
+
+    from nanobot.council import run_council
+    from nanobot.council.formatter import format_council_file, format_telegram_summary
+    from nanobot.council.types import WorkflowSpec
+    from nanobot.agent.tools.orchestrator import OrchestratorNotifyTool
+    from pathlib import Path as _Path
+
+    ws_path = _Path(workspace).expanduser() if workspace else _Path("~/dev/nanobot-workspace").expanduser()
+
+    # -- Trova la spec per ID ---------------------------------------------------
+    spec_path = _find_spec(spec_id, ws_path)
+    if spec_path is None:
+        console.print(f"[red]Spec '{spec_id}' non trovata in {ws_path}[/red]")
+        console.print("[dim]Assicurati che il file sia in <business>/specs/<spec-id>.md[/dim]")
+        raise typer.Exit(1)
+
+    # -- Carica e valida lo status ---------------------------------------------
+    try:
+        spec = WorkflowSpec.from_file(str(spec_path))
+    except Exception as exc:
+        console.print(f"[red]Errore nel leggere la spec: {exc}[/red]")
+        raise typer.Exit(1)
+
+    if spec.status != "draft":
+        console.print(
+            f"[yellow]Attenzione: la spec ha status '{spec.status}', non 'draft'.[/yellow]\n"
+            f"Il Council si lancia normalmente solo su spec in status 'draft'.\n"
+        )
+        proceed = typer.confirm("Vuoi procedere comunque?", default=False)
+        if not proceed:
+            raise typer.Exit(0)
+
+    console.print(f"\n[bold cyan]Council avviato per:[/bold cyan] {spec.title}")
+    console.print(f"[dim]Business: {spec.business_line} | ID: {spec.spec_id}[/dim]")
+    console.print("[dim]6 personas in parallelo, max 90 secondi...[/dim]\n")
+
+    # -- Esegui il Council -----------------------------------------------------
+    try:
+        result = _asyncio.run(run_council(spec, workspace=ws_path))
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Council interrotto dall'utente.[/yellow]")
+        raise typer.Exit(1)
+    except Exception as exc:
+        console.print(f"[red]Council fallito: {exc}[/red]")
+        raise typer.Exit(1)
+
+    ok_count = len(result.available_personas)
+    avg = result.avg_score
+    avg_str = f"{avg:.1f}/10" if avg is not None else "N/A"
+    console.print(f"[green]Council completato.[/green] Personas OK: {ok_count}/6 | Voto medio: {avg_str}")
+
+    if result.failed_personas:
+        failed = ", ".join(r.persona for r in result.failed_personas)
+        console.print(f"[yellow]Personas non disponibili: {failed}[/yellow]")
+
+    # -- Salva il file .council.md ---------------------------------------------
+    council_path = spec_path.parent / f"{spec.spec_id}.council.md"
+    council_content = format_council_file(spec, result)
+    council_path.write_text(council_content, encoding="utf-8")
+    console.print(f"[dim]Report salvato in: {council_path}[/dim]")
+
+    # -- Aggiorna lo status della spec a council-pending -----------------------
+    _update_spec_status(spec_path, "council-pending")
+    console.print("[dim]Status spec aggiornato: council-pending[/dim]")
+
+    # -- Notifica orchestrator --------------------------------------------------
+    telegram_msg = format_telegram_summary(spec, result)
+    try:
+        tool = OrchestratorNotifyTool()
+        notify_result = _asyncio.run(tool.execute(message=telegram_msg))
+        console.print(f"[dim]Orchestrator: {notify_result}[/dim]")
+    except Exception as exc:
+        console.print(f"[dim]Notifica orchestrator non inviata: {exc}[/dim]")
+
+    # -- Output finale ---------------------------------------------------------
+    console.print(f"\n[bold]Sintesi Council:[/bold]\n")
+    console.print(result.synthesis or "(sintesi non disponibile)")
+    console.print(f"\n[bold green]Prossimo passo:[/bold green] approva o modifica la spec, poi usa [bold]nanobot ship-workflow {spec.spec_id}[/bold]")
+
+
+def _find_spec(spec_id: str, workspace: "Path") -> "Path | None":
+    """Cerca il file <spec-id>.md nelle sottocartelle specs/ del workspace."""
+    from pathlib import Path as _Path
+
+    # Cerca direttamente in tutti i <business>/specs/
+    for specs_dir in workspace.glob("*/specs"):
+        candidate = specs_dir / f"{spec_id}.md"
+        if candidate.exists():
+            return candidate
+
+    # Fallback: cerca ovunque nel workspace
+    for candidate in workspace.rglob(f"{spec_id}.md"):
+        return candidate
+
+    return None
+
+
+def _update_spec_status(spec_path: "Path", new_status: str) -> None:
+    """Aggiorna il campo Status: nel file spec."""
+    import re as _re
+
+    content = spec_path.read_text(encoding="utf-8")
+    updated = _re.sub(
+        r"^(Status:\s*).*$",
+        lambda m: f"{m.group(1)}{new_status}",
+        content,
+        count=1,
+        flags=_re.MULTILINE,
+    )
+    # Aggiorna anche Updated:
+    from datetime import date
+    today = date.today().isoformat()
+    updated = _re.sub(
+        r"^(Updated:\s*).*$",
+        lambda m: f"{m.group(1)}{today}",
+        updated,
+        count=1,
+        flags=_re.MULTILINE,
+    )
+    spec_path.write_text(updated, encoding="utf-8")
+
+
 _LOGIN_HANDLERS: dict[str, callable] = {}
 
 
