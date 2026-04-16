@@ -10,15 +10,10 @@ Roles:
     conversation        → MiniMax M2 (API ufficiale)
     build               → MiniMax M2 (generazione workflow JSON)
     council_persona     → dipende dalla persona (vedi PERSONA_ROUTES)
-    council_judge       → GLM-5.1 (OpenRouter z-ai)
-    validate_spec       → Claude Opus (Anthropic primario, OR fallback)
-    review_workflow     → Claude Opus (Anthropic primario, OR fallback)
-    weekly_audit        → Claude Opus (Anthropic primario, OR fallback)
-
-Fallback per Claude (da CLAUDE.md §1.1):
-    401  → fallback immediato a OpenRouter
-    5xx  → fallback immediato a OpenRouter
-    429  → 3 retry con backoff (5s, 15s, 45s) poi OpenRouter
+    council_judge       → DeepSeek V3.2 (OpenRouter)
+    validate_spec       → GLM-5.1 (OpenRouter z-ai)
+    review_workflow     → GLM-5.1 (OpenRouter z-ai)
+    weekly_audit        → GLM-5.1 (OpenRouter z-ai)
 """
 
 from __future__ import annotations
@@ -42,7 +37,8 @@ _OR_GPT4O = "openai/gpt-4o"
 _OR_GEMINI = "google/gemini-2.5-pro"
 _OR_GROK = "x-ai/grok-4"
 _OR_DEEPSEEK = "deepseek/deepseek-chat-v3-0324"  # fallback se Grok non disponibile
-_OR_DEEPSEEK_V32 = "z-ai/glm-5.1"                 # council personas + judge
+_OR_DEEPSEEK_V32 = "deepseek/deepseek-v3.2"       # council personas + judge
+_OR_GLM = "z-ai/glm-5.1"                          # supervisor checkpoints (validate/review/audit)
 
 # Mapping persona → (primary_api, primary_model, fallback_api, fallback_model)
 # primary_api: "anthropic" | "openrouter"
@@ -85,9 +81,9 @@ PERSONA_ROUTES: dict[str, dict] = {
 }
 
 SUPERVISOR_ROUTES: dict[str, dict] = {
-    "validate_spec": {"api": "anthropic", "model": _ANTHROPIC_OPUS, "or_model": _OR_OPUS},
-    "review_workflow": {"api": "anthropic", "model": _ANTHROPIC_OPUS, "or_model": _OR_OPUS},
-    "weekly_audit": {"api": "anthropic", "model": _ANTHROPIC_OPUS, "or_model": _OR_OPUS},
+    "validate_spec": {"api": "openrouter", "model": _OR_GLM, "or_model": _OR_GLM},
+    "review_workflow": {"api": "openrouter", "model": _OR_GLM, "or_model": _OR_GLM},
+    "weekly_audit": {"api": "openrouter", "model": _OR_GLM, "or_model": _OR_GLM},
     "council_judge": {"api": "openrouter", "model": _OR_DEEPSEEK_V32, "or_model": _OR_DEEPSEEK_V32},
     # build: MiniMax M2 per generazione workflow JSON (CLAUDE.md §7.2 Step 2)
     "build": {"api": "minimax"},
