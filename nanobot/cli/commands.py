@@ -728,6 +728,51 @@ def gateway(
                 logger.exception("Dream cron job failed")
             return None
 
+        # Daily brief — legge ORCHESTRATION.md e manda sommario all'orchestrator.
+        if job.name == "daily-brief":
+            try:
+                from nanobot.agent.tools.orchestrator import OrchestratorNotifyTool
+                from datetime import datetime as _dt, timezone as _tz
+                from pathlib import Path as _Path
+
+                ws = _Path("~/dev/nanobot-workspace").expanduser()
+                orch_path = ws / "ORCHESTRATION.md"
+                now_str = _dt.now(_tz.utc).strftime("%d/%m/%Y %H:%M UTC")
+
+                if orch_path.exists():
+                    content = orch_path.read_text(encoding="utf-8")
+                    # Estrai sezioni rilevanti
+                    def _grab(text: str, marker: str) -> str:
+                        lines = text.splitlines()
+                        in_sec, out = False, []
+                        for line in lines:
+                            if line.strip().startswith(marker.strip()):
+                                in_sec = True
+                                out.append(line)
+                                continue
+                            if in_sec:
+                                if line.startswith("## ") and line.strip() != marker.strip():
+                                    break
+                                out.append(line)
+                        return "\n".join(out).strip()
+
+                    active_bl = _grab(content, "## Active Business Lines")
+                    health = _grab(content, "## Health")
+                    brief_text = (
+                        f"☀️ *Brief mattutino* — {now_str}\n\n"
+                        f"{active_bl}\n\n"
+                        f"{health}"
+                    )
+                else:
+                    brief_text = f"☀️ *Brief mattutino* — {now_str}\n\n_(ORCHESTRATION.md non trovato)_"
+
+                notify = OrchestratorNotifyTool()
+                await notify.execute(message=brief_text)
+                logger.info("Daily brief inviato all'orchestrator.")
+            except Exception:
+                logger.exception("Daily brief cron job failed")
+            return None
+
         # Weekly audit — runs independently via ship module.
         if job.name == "weekly-audit":
             try:
@@ -905,6 +950,15 @@ def gateway(
         payload=CronPayload(kind="system_event"),
     ))
     console.print("[green]✓[/green] Weekly audit: ogni domenica alle 21:00")
+
+    # Register daily brief system job (ogni giorno alle 08:00, CLAUDE.md §8.2)
+    cron.register_system_job(CronJob(
+        id="daily-brief",
+        name="daily-brief",
+        schedule=CronSchedule(kind="cron", expr="0 8 * * *", tz=config.agents.defaults.timezone or "Europe/Rome"),
+        payload=CronPayload(kind="system_event"),
+    ))
+    console.print("[green]✓[/green] Daily brief: ogni giorno alle 08:00")
 
     async def run():
         try:

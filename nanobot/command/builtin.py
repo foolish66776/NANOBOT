@@ -342,3 +342,20 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.exact("/dream-restore", cmd_dream_restore)
     router.prefix("/dream-restore ", cmd_dream_restore)
     router.exact("/help", cmd_help)
+
+    # Orchestrator bot commands — le funzioni internamente filtrano su business_line=_orchestrator
+    from nanobot.command.orchestrator import (
+        cmd_orch_status,
+        cmd_orch_state,
+        cmd_orch_specs,
+        cmd_orch_workflows,
+        cmd_orch_council_history,
+        orchestrator_fallback,
+    )
+    router.exact("/status", cmd_orch_status)
+    router.exact("/state", cmd_orch_state)
+    router.prefix("/state ", cmd_orch_state)
+    router.exact("/specs", cmd_orch_specs)
+    router.exact("/workflows", cmd_orch_workflows)
+    router.exact("/council-history", cmd_orch_council_history)
+    router.intercept(orchestrator_fallback)
