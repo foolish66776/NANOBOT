@@ -32,8 +32,10 @@ def _load_prompt(name: str) -> str:
     return f"# Supervisor: {name}\n\nPrompt non configurato."
 
 
-def _extract_verdict(report: str, valid_verdicts: list[str]) -> str:
+def _extract_verdict(report: str | None, valid_verdicts: list[str]) -> str:
     """Estrae il verdetto finale dal report del supervisor."""
+    if not report:
+        return "STOP"
     for line in report.splitlines():
         stripped = line.strip("# *-").strip()
         for v in valid_verdicts:

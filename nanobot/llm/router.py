@@ -316,7 +316,10 @@ class LLMRouter:
 
         if resp.status_code == 200:
             data = resp.json()
-            return data["choices"][0]["message"]["content"]
+            content = data["choices"][0]["message"]["content"]
+            if content is None:
+                raise RuntimeError(f"OpenRouter {model} returned null content: {data}")
+            return content
 
         # Grok fallback: se il modello non è disponibile su OR, tenta DeepSeek
         if resp.status_code in (400, 404) and model == _OR_GROK:
