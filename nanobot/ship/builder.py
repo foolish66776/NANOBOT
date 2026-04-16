@@ -26,6 +26,7 @@ Il tuo compito è leggere una workflow-spec.md e produrre un JSON valido per n8n
 5. I limiti hard della spec DEVONO essere implementati come nodi reali (es. Limit, Split In Batches, If con filtri).
 6. Le credenziali vanno referenziate come {{ $credentials.nomecredenziale }}, mai hardcodate.
 7. Il trigger deve corrispondere esattamente a quello dichiarato nella spec (cron expression, webhook path, ecc.).
+8. La timezone NON va nei parametri del nodo Schedule Trigger. Va in `settings.timezone` a livello workflow (es. `"settings": {"executionOrder": "v1", "timezone": "Europe/Rome"}`).
 8. Non aggiungere nodi non dichiarati nella spec.
 
 ## Formato connections
