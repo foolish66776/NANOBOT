@@ -10,7 +10,7 @@ Roles:
     conversation        → MiniMax M2 (API ufficiale)
     build               → MiniMax M2 (generazione workflow JSON)
     council_persona     → dipende dalla persona (vedi PERSONA_ROUTES)
-    council_judge       → DeepSeek V3.2 (OpenRouter)
+    council_judge       → GLM-5.1 (OpenRouter z-ai)
     validate_spec       → Claude Opus (Anthropic primario, OR fallback)
     review_workflow     → Claude Opus (Anthropic primario, OR fallback)
     weekly_audit        → Claude Opus (Anthropic primario, OR fallback)
@@ -42,7 +42,7 @@ _OR_GPT4O = "openai/gpt-4o"
 _OR_GEMINI = "google/gemini-2.5-pro"
 _OR_GROK = "x-ai/grok-4"
 _OR_DEEPSEEK = "deepseek/deepseek-chat-v3-0324"  # fallback se Grok non disponibile
-_OR_DEEPSEEK_V32 = "deepseek/deepseek-v3.2"       # council personas + judge
+_OR_DEEPSEEK_V32 = "z-ai/glm-5.1"                 # council personas + judge
 
 # Mapping persona → (primary_api, primary_model, fallback_api, fallback_model)
 # primary_api: "anthropic" | "openrouter"

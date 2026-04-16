@@ -51,11 +51,13 @@ class N8nClient:
 
     async def import_workflow(self, workflow_json: dict[str, Any]) -> dict[str, Any]:
         """Importa un nuovo workflow (non attivo). Restituisce l'oggetto workflow creato."""
+        # n8n rifiuta il campo "id" nel body (read-only): va rimosso prima del POST
+        payload = {k: v for k, v in workflow_json.items() if k != "id"}
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             resp = await client.post(
                 f"{self.base_url}/api/v1/workflows",
                 headers=self._headers,
-                json=workflow_json,
+                json=payload,
             )
         if resp.status_code not in (200, 201):
             raise RuntimeError(f"Import workflow fallito {resp.status_code}: {resp.text[:400]}")
