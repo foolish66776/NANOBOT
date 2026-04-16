@@ -52,7 +52,7 @@ class N8nClient:
     async def import_workflow(self, workflow_json: dict[str, Any]) -> dict[str, Any]:
         """Importa un nuovo workflow (non attivo). Restituisce l'oggetto workflow creato."""
         # n8n accetta solo questi campi in POST — tutto il resto è server-generated
-        _ALLOWED = {"name", "nodes", "connections", "settings", "staticData", "tags", "active"}
+        _ALLOWED = {"name", "nodes", "connections", "settings", "staticData", "tags"}
         payload = {k: v for k, v in workflow_json.items() if k in _ALLOWED}
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             resp = await client.post(
