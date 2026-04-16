@@ -4,9 +4,11 @@ Usage:
     router = LLMRouter()
     text = await router.complete(role="council_judge", system="...", user="...")
     text = await router.complete(role="council_persona", persona="vc_unicorni", system="...", user="...")
+    text = await router.complete(role="build", system="...", user="...")
 
 Roles:
     conversation        → MiniMax M2 (API ufficiale)
+    build               → MiniMax M2 (generazione workflow JSON)
     council_persona     → dipende dalla persona (vedi PERSONA_ROUTES)
     council_judge       → Claude Opus (Anthropic primario, OR fallback)
     validate_spec       → Claude Opus (Anthropic primario, OR fallback)
@@ -24,7 +26,6 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass, field
-from typing import Literal
 
 import httpx
 from loguru import logger
@@ -87,6 +88,8 @@ SUPERVISOR_ROUTES: dict[str, dict] = {
     "review_workflow": {"api": "anthropic", "model": _ANTHROPIC_OPUS, "or_model": _OR_OPUS},
     "weekly_audit": {"api": "anthropic", "model": _ANTHROPIC_OPUS, "or_model": _OR_OPUS},
     "council_judge": {"api": "anthropic", "model": _ANTHROPIC_OPUS, "or_model": _OR_OPUS},
+    # build: MiniMax M2 per generazione workflow JSON (CLAUDE.md §7.2 Step 2)
+    "build": {"api": "minimax"},
 }
 
 _CLAUDE_RETRY_DELAYS = [5.0, 15.0, 45.0]
@@ -101,6 +104,18 @@ class LLMRouter:
     )
     openrouter_api_key: str = field(
         default_factory=lambda: os.environ.get("OPENROUTER_API_KEY", "")
+    )
+    minimax_api_key: str = field(
+        default_factory=lambda: os.environ.get("MINIMAX_API_KEY", "")
+    )
+    minimax_base_url: str = field(
+        default_factory=lambda: os.environ.get("MINIMAX_BASE_URL", "https://api.minimax.io")
+    )
+    minimax_group_id: str = field(
+        default_factory=lambda: os.environ.get("MINIMAX_GROUP_ID", "")
+    )
+    minimax_model: str = field(
+        default_factory=lambda: os.environ.get("MINIMAX_DEFAULT_MODEL", "minimax-m2")
     )
     llm_log_path: str = field(
         default_factory=lambda: os.path.expanduser(
@@ -148,6 +163,10 @@ class LLMRouter:
             route = SUPERVISOR_ROUTES[role]
         else:
             raise ValueError(f"Unknown role: {role!r}")
+
+        # MiniMax routes (build, conversation) handled separately
+        if route.get("api") == "minimax":
+            return await self._call_minimax(system=system, user=user, max_tokens=max_tokens)
 
         return await self._call_with_fallback(route, system=system, user=user, max_tokens=max_tokens)
 
@@ -307,6 +326,54 @@ class LLMRouter:
             )
 
         raise RuntimeError(f"OpenRouter {resp.status_code} for {model}: {resp.text[:300]}")
+
+    async def _call_minimax(
+        self,
+        *,
+        system: str,
+        user: str,
+        max_tokens: int,
+    ) -> str:
+        """Chiama MiniMax M2 via API ufficiale (OpenAI-compat endpoint)."""
+        if not self.minimax_api_key:
+            raise RuntimeError("MINIMAX_API_KEY non configurata")
+
+        # MiniMax espone un endpoint OpenAI-compatibile
+        base = self.minimax_base_url.rstrip("/")
+        url = f"{base}/v1/text/chatcompletion_v2"
+
+        # Normalizza il model name (rimuove prefisso "minimax/" se presente)
+        model = self.minimax_model
+        if model.startswith("minimax/"):
+            model = model[len("minimax/"):]
+
+        payload: dict = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }
+        headers = {
+            "Authorization": f"Bearer {self.minimax_api_key}",
+            "Content-Type": "application/json",
+        }
+        if self.minimax_group_id:
+            headers["GroupId"] = self.minimax_group_id
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+
+        if resp.status_code == 200:
+            data = resp.json()
+            # MiniMax usa lo stesso formato di OpenAI
+            choices = data.get("choices") or []
+            if choices:
+                return choices[0]["message"]["content"]
+            raise RuntimeError(f"MiniMax risposta senza choices: {data}")
+
+        raise RuntimeError(f"MiniMax {resp.status_code}: {resp.text[:300]}")
 
     # -----------------------------------------------------------------------
     # Logging

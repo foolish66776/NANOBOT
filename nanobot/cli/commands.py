@@ -728,6 +728,37 @@ def gateway(
                 logger.exception("Dream cron job failed")
             return None
 
+        # Weekly audit — runs independently via ship module.
+        if job.name == "weekly-audit":
+            try:
+                from nanobot.ship.n8n_client import N8nClient
+                from nanobot.ship.checkpoints import weekly_audit as _weekly_audit
+                from nanobot.agent.tools.orchestrator import OrchestratorNotifyTool
+                from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+                n8n = N8nClient()
+                workflows = await n8n.list_workflows()
+                live = [w for w in workflows if w.get("active")]
+                lines = [f"Workflow attivi: {len(live)}", ""]
+                for wf in live:
+                    wid = str(wf.get("id", ""))
+                    wname = wf.get("name", wid)
+                    try:
+                        execs = await n8n.get_executions(workflow_id=wid, limit=50)
+                        total = len(execs)
+                        success = sum(1 for e in execs if e.get("status") == "success")
+                        pct = f"{success/total*100:.0f}%" if total else "N/A"
+                        lines.append(f"- **{wname}**: {total} esecuzioni, {pct} successo")
+                    except Exception:
+                        lines.append(f"- **{wname}**: errore dati")
+                report = await _weekly_audit(workflows_summary="\n".join(lines))
+                notify = OrchestratorNotifyTool()
+                await notify.execute(message=f"📊 Weekly Audit\n\n{report[:1500]}")
+                logger.info("Weekly audit completato e inviato all'orchestrator.")
+            except Exception:
+                logger.exception("Weekly audit cron job failed")
+            return None
+
         from nanobot.agent.tools.cron import CronTool
         from nanobot.agent.tools.message import MessageTool
         from nanobot.utils.evaluator import evaluate_response
@@ -864,6 +895,16 @@ def gateway(
         payload=CronPayload(kind="system_event"),
     ))
     console.print(f"[green]✓[/green] Dream: {dream_cfg.describe_schedule()}")
+
+    # Register weekly audit system job (ogni domenica alle 21:00, CLAUDE.md §7.3)
+    from nanobot.cron.types import CronSchedule
+    cron.register_system_job(CronJob(
+        id="weekly-audit",
+        name="weekly-audit",
+        schedule=CronSchedule(kind="cron", expr="0 21 * * 0", tz=config.agents.defaults.timezone or "Europe/Rome"),
+        payload=CronPayload(kind="system_event"),
+    ))
+    console.print("[green]✓[/green] Weekly audit: ogni domenica alle 21:00")
 
     async def run():
         try:
@@ -1457,6 +1498,217 @@ def business_show(
     else:
         console.print("[dim](not configured)[/dim]")
     console.print()
+
+
+# ============================================================================
+# Ship-workflow command
+# ============================================================================
+
+@app.command("ship-workflow")
+def ship_workflow(
+    spec_id: str = typer.Argument(help="ID della spec (es. 2026-04-16-morning-brief)"),
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Override workspace path"),
+    skip_dryrun: bool = typer.Option(False, "--skip-dryrun", help="Salta il dry-run (debug)"),
+):
+    """Pipeline completo da spec council-approved a workflow live in n8n.
+
+    Step: validate-spec → build → review-workflow → dry-run → approvazione → import+activate.
+    """
+    import asyncio as _asyncio
+    from pathlib import Path as _Path
+
+    from nanobot.council.types import WorkflowSpec
+    from nanobot.ship.pipeline import ShipPipeline, ShipResult
+    from nanobot.agent.tools.orchestrator import OrchestratorNotifyTool
+
+    ws_path = _Path(workspace).expanduser() if workspace else _Path("~/dev/nanobot-workspace").expanduser()
+
+    # Trova la spec
+    spec_path = _find_spec(spec_id, ws_path)
+    if spec_path is None:
+        console.print(f"[red]Spec '{spec_id}' non trovata in {ws_path}[/red]")
+        raise typer.Exit(1)
+
+    try:
+        spec = WorkflowSpec.from_file(str(spec_path))
+    except Exception as exc:
+        console.print(f"[red]Errore nel leggere la spec: {exc}[/red]")
+        raise typer.Exit(1)
+
+    if spec.status not in ("council-approved", "draft"):
+        console.print(
+            f"[yellow]Status spec: '{spec.status}'.[/yellow]\n"
+            f"ship-workflow si aspetta 'council-approved'. Procedo comunque."
+        )
+
+    progress_msgs: list[str] = []
+    def _on_progress(msg: str) -> None:
+        progress_msgs.append(msg)
+        console.print(f"[dim]{msg}[/dim]")
+
+    pipeline = ShipPipeline(workspace=ws_path, on_progress=_on_progress)
+
+    # ---- Step 1: validate-spec ----
+    console.print(f"\n[bold cyan]Ship workflow:[/bold cyan] {spec.title}\n")
+    try:
+        validate_report, verdict = _asyncio.run(pipeline.run_validate_spec(spec))
+    except Exception as exc:
+        console.print(f"[red]validate-spec fallito: {exc}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"\n[bold]Validate-spec verdetto:[/bold] {verdict}\n")
+    console.print(validate_report)
+
+    if verdict == "STOP":
+        console.print("\n[red]Pipeline bloccato da validate-spec. Modifica la spec e rilancia.[/red]")
+        raise typer.Exit(1)
+
+    if verdict == "APPROVABILE CON MODIFICHE MINORI":
+        console.print("\n[yellow]Il supervisor richiede modifiche minori prima di procedere.[/yellow]")
+        proceed = typer.confirm("Procedi comunque senza modifiche?", default=False)
+        if not proceed:
+            console.print("Modifica la spec e rilancia.")
+            raise typer.Exit(0)
+
+    # ---- Step 2+3: build + review ----
+    try:
+        workflow_json, workflow_path, review_report, review_verdict = _asyncio.run(
+            pipeline.run_build_and_review(spec)
+        )
+    except Exception as exc:
+        console.print(f"[red]Build/review fallito: {exc}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"\n[bold]Review-workflow verdetto:[/bold] {review_verdict}\n")
+    console.print(review_report)
+
+    if review_verdict == "STOP":
+        console.print("\n[red]Pipeline bloccato da review-workflow. Modifica la spec e rilancia.[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"\n[dim]Workflow JSON salvato in: {workflow_path}[/dim]")
+
+    # ---- Step 4: dry-run ----
+    if not skip_dryrun:
+        try:
+            dryrun_log, _ = _asyncio.run(pipeline.run_dryrun(spec, workflow_json))
+        except Exception as exc:
+            dryrun_log = f"Dry-run non disponibile: {exc}"
+            console.print(f"[yellow]Dry-run saltato: {exc}[/yellow]")
+
+        console.print(f"\n[bold]Risultato dry-run:[/bold]\n")
+        console.print(dryrun_log)
+    else:
+        dryrun_log = "(dry-run saltato con --skip-dryrun)"
+        console.print("\n[yellow]Dry-run saltato (--skip-dryrun).[/yellow]")
+
+    # ---- Step 5: approvazione Alessandro ----
+    console.print(f"\n[bold yellow]Approvazione richiesta.[/bold yellow]")
+    console.print("Leggi il dry-run sopra. Il workflow verrà importato e attivato in n8n.")
+    approved = typer.confirm("Approvi l'attivazione in produzione?", default=False)
+    if not approved:
+        console.print("[yellow]Workflow non attivato. Puoi modificare la spec e rilanciare.[/yellow]")
+        raise typer.Exit(0)
+
+    # ---- Step 6: import + activate ----
+    try:
+        result = _asyncio.run(pipeline.finalize(spec, workflow_json))
+    except Exception as exc:
+        console.print(f"[red]Import/attivazione fallita: {exc}[/red]")
+        raise typer.Exit(1)
+
+    if result.success:
+        console.print(f"\n[bold green]Workflow LIVE in n8n![/bold green]")
+        console.print(f"URL: {result.n8n_workflow_url}")
+        console.print(f"Status spec aggiornato: live")
+
+        # Notifica orchestrator
+        notify_msg = (
+            f"🚀 Workflow LIVE: {spec.title} ({spec.business_line})\n"
+            f"URL n8n: {result.n8n_workflow_url}\n"
+            f"Spec: `{spec.spec_id}` | Status: live"
+        )
+        try:
+            tool = OrchestratorNotifyTool()
+            _asyncio.run(tool.execute(message=notify_msg))
+        except Exception:
+            pass
+    else:
+        console.print(f"[red]Attivazione fallita. Controlla n8n manualmente.[/red]")
+        console.print(f"[dim]Workflow importato con ID: {result.n8n_workflow_id}[/dim]")
+        raise typer.Exit(1)
+
+
+# ============================================================================
+# Weekly audit command
+# ============================================================================
+
+@app.command("weekly-audit")
+def weekly_audit_cmd(
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Override workspace path"),
+):
+    """Esegui manualmente l'audit settimanale dei workflow live in n8n.
+
+    Recupera le esecuzioni della settimana, chiama il supervisor Claude,
+    manda il report sull'orchestrator.
+    """
+    import asyncio as _asyncio
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    from pathlib import Path as _Path
+
+    from nanobot.ship.checkpoints import weekly_audit
+    from nanobot.ship.n8n_client import N8nClient
+    from nanobot.agent.tools.orchestrator import OrchestratorNotifyTool
+
+    console.print("[bold cyan]Weekly audit avviato...[/bold cyan]\n")
+
+    try:
+        n8n = N8nClient()
+    except RuntimeError as exc:
+        console.print(f"[red]n8n non configurato: {exc}[/red]")
+        raise typer.Exit(1)
+
+    async def _run_audit() -> str:
+        workflows = await n8n.list_workflows()
+        live = [w for w in workflows if w.get("active")]
+        since = (_dt.now(_tz.utc) - _td(days=7)).isoformat()
+
+        # Costruisce il sommario per il supervisor
+        lines = [
+            f"Workflow attivi: {len(live)}",
+            f"Periodo: ultimi 7 giorni (da {since[:10]})",
+            "",
+        ]
+        for wf in live:
+            wf_id = str(wf.get("id", ""))
+            wf_name = wf.get("name", wf_id)
+            try:
+                execs = await n8n.get_executions(workflow_id=wf_id, limit=50)
+                total = len(execs)
+                success = sum(1 for e in execs if e.get("status") == "success")
+                pct = f"{success/total*100:.0f}%" if total else "N/A"
+                lines.append(f"- **{wf_name}**: {total} esecuzioni, {pct} successo")
+            except Exception as exc:
+                lines.append(f"- **{wf_name}**: errore recupero esecuzioni ({exc})")
+
+        summary = "\n".join(lines)
+        return await weekly_audit(workflows_summary=summary)
+
+    try:
+        report = _asyncio.run(_run_audit())
+    except Exception as exc:
+        console.print(f"[red]Audit fallito: {exc}[/red]")
+        raise typer.Exit(1)
+
+    console.print(report)
+
+    # Notifica orchestrator
+    try:
+        tool = OrchestratorNotifyTool()
+        _asyncio.run(tool.execute(message=f"📊 Weekly Audit\n\n{report[:1500]}"))
+        console.print("\n[dim]Report inviato all'orchestrator.[/dim]")
+    except Exception:
+        pass
 
 
 # ============================================================================
