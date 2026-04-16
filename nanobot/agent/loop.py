@@ -266,7 +266,8 @@ class AgentLoop:
         for cls in (GlobTool, GrepTool):
             self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
         self.tools.register(NotebookEditTool(workspace=self.workspace, allowed_dir=allowed_dir))
-        if self.exec_config.enable:
+        _allow_exec = os.environ.get("NANOBOT_ALLOW_EXTERNAL_EXEC", "").lower() == "true"
+        if self.exec_config.enable and _allow_exec:
             self.tools.register(
                 ExecTool(
                     working_dir=str(self.workspace),
@@ -276,6 +277,11 @@ class AgentLoop:
                     path_append=self.exec_config.path_append,
                     allowed_env_keys=self.exec_config.allowed_env_keys,
                 )
+            )
+        elif self.exec_config.enable and not _allow_exec:
+            logger.info(
+                "ExecTool disabled: NANOBOT_ALLOW_EXTERNAL_EXEC is not set to 'true'. "
+                "Set this env var to re-enable shell execution."
             )
         if self.web_config.enable:
             self.tools.register(
