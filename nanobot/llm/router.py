@@ -52,7 +52,7 @@ PERSONA_ROUTES: dict[str, dict] = {
 
 SUPERVISOR_ROUTES: dict[str, dict] = {
     "validate_spec":  {"api": "openrouter", "model": _OR_CLAUDE_HAIKU_45, "or_model": _OR_CLAUDE_HAIKU_45},
-    "review_workflow":{"api": "openrouter", "model": _OR_ELEPHANT,        "or_model": _OR_CLAUDE_HAIKU_45},
+    "review_workflow":{"api": "openrouter", "model": _OR_DEEPSEEK_V32,    "or_model": _OR_DEEPSEEK_V32},
     "weekly_audit":   {"api": "openrouter", "model": _OR_CLAUDE_HAIKU_45, "or_model": _OR_CLAUDE_HAIKU_45},
     "council_judge":  {"api": "openrouter", "model": _OR_DEEPSEEK_V32,    "or_model": _OR_DEEPSEEK_V32},
     # build: MiniMax M2 per generazione workflow JSON (CLAUDE.md §7.2 Step 2)

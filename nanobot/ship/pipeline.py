@@ -26,6 +26,7 @@ from nanobot.llm.router import LLMRouter
 from nanobot.ship.builder import build_workflow
 from nanobot.ship.checkpoints import review_workflow, validate_spec
 from nanobot.ship.n8n_client import N8nClient
+from nanobot.ship.validator import validate_n8n_json
 
 
 @dataclass
@@ -118,7 +119,21 @@ class ShipPipeline:
                 router=self.router,
             )
 
-            self._p(f"Step 3/4 — review-workflow (Claude checkpoint, iterazione {iteration})...")
+            # Pre-validazione deterministica (gratuita, prima del LLM)
+            validation_errors = validate_n8n_json(last_workflow)
+            if validation_errors:
+                error_list = "\n".join(f"- {e}" for e in validation_errors)
+                self._p(
+                    f"Pre-validazione: {len(validation_errors)} errori tecnici n8n "
+                    f"(iterazione {iteration}), rebuild diretto senza LLM review..."
+                )
+                logger.warning("Pre-validazione fallita:\n{}", error_list)
+                feedback = f"Errori tecnici n8n da correggere obbligatoriamente:\n{error_list}"
+                last_verdict = "DA RIFARE"
+                last_report = f"Pre-validazione fallita — errori strutturali:\n{error_list}"
+                continue
+
+            self._p(f"Step 3/4 — review-workflow (DeepSeek V3.2, iterazione {iteration})...")
             last_report, last_verdict = await review_workflow(
                 spec_content=spec.raw_content,
                 workflow_json_str=json.dumps(last_workflow, indent=2, ensure_ascii=False),

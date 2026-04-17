@@ -20,6 +20,7 @@ from loguru import logger
 from nanobot.llm.router import LLMRouter
 
 _PROMPTS_DIR = Path("~/.nanobot/supervisor-prompts").expanduser()
+_N8N_RULES_PATH = Path("~/.nanobot/n8n-rules.md").expanduser()
 
 Verdict = Literal["APPROVABILE", "APPROVABILE CON MODIFICHE MINORI", "STOP", "DA RIFARE",
                   "COMPLETA", "QUASI COMPLETA", "INCOMPLETA"]
@@ -82,7 +83,7 @@ async def review_workflow(
     workflow_json_str: str,
     router: LLMRouter | None = None,
 ) -> tuple[str, Verdict]:
-    """Chiama Claude per verificare il workflow JSON generato contro la spec.
+    """Chiama DeepSeek per verificare il workflow JSON generato contro la spec.
 
     Returns:
         (report_text, verdict)
@@ -90,6 +91,8 @@ async def review_workflow(
     """
     r = router or LLMRouter()
     system = _load_prompt("review-workflow")
+    if _N8N_RULES_PATH.exists():
+        system += f"\n\n---\n\n{_N8N_RULES_PATH.read_text(encoding='utf-8')}"
 
     user = (
         f"# Spec approvata\n\n{spec_content}"
