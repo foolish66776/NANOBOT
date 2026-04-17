@@ -21,7 +21,8 @@ from nanobot.llm.router import LLMRouter
 
 _PROMPTS_DIR = Path("~/.nanobot/supervisor-prompts").expanduser()
 
-Verdict = Literal["APPROVABILE", "APPROVABILE CON MODIFICHE MINORI", "STOP", "DA RIFARE"]
+Verdict = Literal["APPROVABILE", "APPROVABILE CON MODIFICHE MINORI", "STOP", "DA RIFARE",
+                  "COMPLETA", "QUASI COMPLETA", "INCOMPLETA"]
 
 
 def _load_prompt(name: str) -> str:
@@ -50,31 +51,23 @@ def _extract_verdict(report: str | None, valid_verdicts: list[str]) -> str:
 
 async def validate_spec(
     spec_content: str,
-    council_report: str = "",
-    business_personas: str = "",
     router: LLMRouter | None = None,
 ) -> tuple[str, Verdict]:
-    """Chiama Claude per validare la spec prima del build.
+    """Checklist tecnica sulla spec — NON legge council.md.
 
     Returns:
         (report_text, verdict)
-        verdict: APPROVABILE | APPROVABILE CON MODIFICHE MINORI | STOP
+        verdict: COMPLETA | QUASI COMPLETA | INCOMPLETA
     """
     r = router or LLMRouter()
     system = _load_prompt("validate-spec")
+    user = f"# Spec da verificare\n\n{spec_content}"
 
-    parts = ["# Spec da validare\n\n", spec_content]
-    if council_report:
-        parts += ["\n\n---\n\n# Council report\n\n", council_report]
-    if business_personas:
-        parts += ["\n\n---\n\n# Personas cliente (business line)\n\n", business_personas]
-    user = "".join(parts)
-
-    report = await r.complete(role="validate_spec", system=system, user=user, max_tokens=4000)
+    report = await r.complete(role="validate_spec", system=system, user=user, max_tokens=1000)
 
     verdict = _extract_verdict(
         report,
-        ["APPROVABILE CON MODIFICHE MINORI", "APPROVABILE", "STOP"],
+        ["QUASI COMPLETA", "COMPLETA", "INCOMPLETA"],
     )
     logger.info("validate-spec verdetto: {}", verdict)
     return report, verdict  # type: ignore[return-value]

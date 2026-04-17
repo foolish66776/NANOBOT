@@ -1613,15 +1613,14 @@ def ship_workflow(
     console.print(f"\n[bold]Validate-spec verdetto:[/bold] {verdict}\n")
     console.print(validate_report)
 
-    if verdict == "STOP":
-        console.print("\n[red]Pipeline bloccato da validate-spec. Modifica la spec e rilancia.[/red]")
+    if verdict == "INCOMPLETA":
+        console.print("\n[red]Spec incompleta — compila i campi mancanti e rilancia.[/red]")
         raise typer.Exit(1)
 
-    if verdict == "APPROVABILE CON MODIFICHE MINORI":
-        console.print("\n[yellow]Il supervisor richiede modifiche minori prima di procedere.[/yellow]")
-        proceed = typer.confirm("Procedi comunque senza modifiche?", default=False)
+    if verdict == "QUASI COMPLETA":
+        console.print("\n[yellow]Spec quasi completa — piccole lacune segnalate sopra.[/yellow]")
+        proceed = typer.confirm("Procedi comunque?", default=True)
         if not proceed:
-            console.print("Modifica la spec e rilancia.")
             raise typer.Exit(0)
 
     # ---- Step 2+3: build + review ----

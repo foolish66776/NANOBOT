@@ -11,9 +11,9 @@ Roles:
     build               → MiniMax M2 (generazione workflow JSON)
     council_persona     → dipende dalla persona (vedi PERSONA_ROUTES)
     council_judge       → DeepSeek V3.2 (OpenRouter)
-    validate_spec       → GLM-5.1 (OpenRouter z-ai)
-    review_workflow     → GLM-5.1 (OpenRouter z-ai)
-    weekly_audit        → GLM-5.1 (OpenRouter z-ai)
+    validate_spec       → Claude Haiku 4.5 (OpenRouter)
+    review_workflow     → elephant-alpha (OpenRouter, fallback Haiku 4.5)
+    weekly_audit        → Claude Haiku 4.5 (OpenRouter)
 """
 
 from __future__ import annotations
@@ -29,61 +29,32 @@ from loguru import logger
 # Costanti modelli
 # ---------------------------------------------------------------------------
 
-_ANTHROPIC_SONNET = "claude-sonnet-4-5"
-_ANTHROPIC_OPUS = "claude-opus-4-5"
-_OR_SONNET = "anthropic/claude-sonnet-4-5"
-_OR_OPUS = "anthropic/claude-opus-4-5"
-_OR_GPT4O = "openai/gpt-4o"
-_OR_GEMINI = "google/gemini-2.5-pro"
-_OR_GROK = "x-ai/grok-4"
-_OR_DEEPSEEK = "deepseek/deepseek-chat-v3-0324"  # fallback se Grok non disponibile
-_OR_DEEPSEEK_V32 = "deepseek/deepseek-v3.2"       # council personas + judge
+_OR_GPT4O         = "openai/gpt-oss-120b"                # vc-unicorni
+_OR_MISTRALAI     = "mistralai/mistral-small-creative"   # bartlett (super-creative)
+_OR_GROK          = "x-ai/grok-4-fast"                  # visionario
+_OR_SAO10K        = "sao10k/l3-lunaris-8b"               # voce-cliente
+_OR_DEEPSEEK      = "deepseek/deepseek-chat-v3-0324"     # fallback Grok
+_OR_DEEPSEEK_V32  = "deepseek/deepseek-v3.2"             # council personas + judge
+_OR_ELEPHANT      = "openrouter/elephant-alpha"          # review_workflow (primary)
+_OR_CLAUDE_HAIKU_45 = "anthropic/claude-haiku-4.5"       # supervisori + review fallback
 
 # Mapping persona → (primary_api, primary_model, fallback_api, fallback_model)
 # primary_api: "anthropic" | "openrouter"
 PERSONA_ROUTES: dict[str, dict] = {
-    "voce-cliente": {
-        "api": "openrouter",
-        "model": _OR_DEEPSEEK_V32,
-        "or_model": _OR_DEEPSEEK_V32,
-    },
-    "vc-unicorni": {
-        "api": "openrouter",
-        "model": _OR_GPT4O,
-        "or_model": _OR_GPT4O,
-    },
-    "bartlett": {
-        "api": "openrouter",
-        "model": _OR_GEMINI,
-        "or_model": _OR_GEMINI,
-    },
-    "visionario": {
-        "api": "openrouter",
-        "model": _OR_GROK,
-        "or_model": _OR_DEEPSEEK,  # fallback automatico se Grok non disponibile
-    },
-    "jobs": {
-        "api": "openrouter",
-        "model": _OR_DEEPSEEK_V32,
-        "or_model": _OR_DEEPSEEK_V32,
-    },
-    "munger": {
-        "api": "openrouter",
-        "model": _OR_DEEPSEEK_V32,
-        "or_model": _OR_DEEPSEEK_V32,
-    },
-    "giudice": {
-        "api": "openrouter",
-        "model": _OR_DEEPSEEK_V32,
-        "or_model": _OR_DEEPSEEK_V32,
-    },
+    "voce-cliente": {"api": "openrouter", "model": _OR_SAO10K,       "or_model": _OR_DEEPSEEK_V32},
+    "vc-unicorni":  {"api": "openrouter", "model": _OR_GPT4O,        "or_model": _OR_DEEPSEEK_V32},
+    "bartlett":     {"api": "openrouter", "model": _OR_MISTRALAI,    "or_model": _OR_DEEPSEEK_V32},
+    "visionario":   {"api": "openrouter", "model": _OR_GROK,         "or_model": _OR_DEEPSEEK},
+    "jobs":         {"api": "openrouter", "model": _OR_DEEPSEEK_V32, "or_model": _OR_DEEPSEEK_V32},
+    "munger":       {"api": "openrouter", "model": _OR_DEEPSEEK_V32, "or_model": _OR_DEEPSEEK_V32},
+    "giudice":      {"api": "openrouter", "model": _OR_DEEPSEEK_V32, "or_model": _OR_DEEPSEEK_V32},
 }
 
 SUPERVISOR_ROUTES: dict[str, dict] = {
-    "validate_spec": {"api": "openrouter", "model": _OR_DEEPSEEK_V32, "or_model": _OR_DEEPSEEK_V32},
-    "review_workflow": {"api": "openrouter", "model": _OR_DEEPSEEK_V32, "or_model": _OR_DEEPSEEK_V32},
-    "weekly_audit": {"api": "openrouter", "model": _OR_DEEPSEEK_V32, "or_model": _OR_DEEPSEEK_V32},
-    "council_judge": {"api": "openrouter", "model": _OR_DEEPSEEK_V32, "or_model": _OR_DEEPSEEK_V32},
+    "validate_spec":  {"api": "openrouter", "model": _OR_CLAUDE_HAIKU_45, "or_model": _OR_CLAUDE_HAIKU_45},
+    "review_workflow":{"api": "openrouter", "model": _OR_ELEPHANT,        "or_model": _OR_CLAUDE_HAIKU_45},
+    "weekly_audit":   {"api": "openrouter", "model": _OR_CLAUDE_HAIKU_45, "or_model": _OR_CLAUDE_HAIKU_45},
+    "council_judge":  {"api": "openrouter", "model": _OR_DEEPSEEK_V32,    "or_model": _OR_DEEPSEEK_V32},
     # build: MiniMax M2 per generazione workflow JSON (CLAUDE.md §7.2 Step 2)
     "build": {"api": "minimax"},
 }

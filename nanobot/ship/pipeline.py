@@ -75,16 +75,9 @@ class ShipPipeline:
         """Ritorna (report, verdict)."""
         self._p("Step 1/4 — validate-spec (Claude checkpoint)...")
 
-        council_path = Path(spec.path).parent / f"{spec.spec_id}.council.md"
-        council_report = council_path.read_text(encoding="utf-8") if council_path.exists() else ""
-
-        personas_path = self.workspace / spec.business_line / "_personas.md"
-        business_personas = personas_path.read_text(encoding="utf-8") if personas_path.exists() else ""
-
+        # validate-spec è solo checklist tecnica — NON legge council.md
         report, verdict = await validate_spec(
             spec_content=spec.raw_content,
-            council_report=council_report,
-            business_personas=business_personas,
             router=self.router,
         )
         return report, verdict

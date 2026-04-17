@@ -104,7 +104,7 @@ def format_council_file(spec: WorkflowSpec, result: CouncilResult) -> str:
 
 def _extract_recommendation(synthesis: str) -> str:
     """Estrae la raccomandazione operativa dalla sintesi del giudice."""
-    markers = ["VAI così", "VAI con", "NON ANDARE", "RIDISCUTI", "VAI"]
+    markers = ["Piano d'azione immediato", "Le 2 cose su cui fare all-in", "Il nucleo forte"]
     for line in synthesis.splitlines():
         stripped = line.strip("- *#").strip()
         for marker in markers:
