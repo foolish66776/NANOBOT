@@ -1554,6 +1554,190 @@ def business_show(
     console.print()
 
 
+@business_app.command("create")
+def business_create(
+    config_path: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+):
+    """Scaffold una nuova business line in ~1 minuto.
+
+    Aggiunge la business line a config.json, crea la cartella workspace con
+    _state.md, _personas.md, ideas/, specs/, workflows/ e aggiorna ORCHESTRATION.md.
+    """
+    import json as _json
+    import re as _re
+    from datetime import date as _date
+    from pathlib import Path as _Path
+
+    from nanobot.config.loader import get_config_path
+
+    config_file = _Path(config_path).expanduser().resolve() if config_path else get_config_path()
+    ws_path = _Path(workspace).expanduser() if workspace else _Path("~/dev/nanobot-workspace").expanduser()
+
+    console.print(f"\n[bold cyan]Nuova Business Line[/bold cyan]\n")
+
+    # --- Raccolta input interattivo -------------------------------------------
+
+    bl_id = typer.prompt("Business ID (lowercase, no spazi, es. youtube)")
+    bl_id = bl_id.strip().lower()
+    if not _re.match(r'^[a-z][a-z0-9-]*$', bl_id):
+        console.print("[red]Business ID non valido. Usa solo lowercase, cifre e trattini.[/red]")
+        raise typer.Exit(1)
+
+    display_name = typer.prompt("Display name (es. YouTube)")
+    display_name = display_name.strip()
+
+    default_container = bl_id
+    container_tag = typer.prompt(f"Container tag (default: {default_container})", default=default_container)
+    container_tag = container_tag.strip()
+
+    telegram_token = typer.prompt("Telegram bot token (crea su @BotFather, lascia vuoto per saltare)", default="")
+    telegram_token = telegram_token.strip()
+
+    allow_from_str = typer.prompt("allowFrom user IDs Telegram (separati da virgola)", default="8273632991")
+    allow_from = [uid.strip() for uid in allow_from_str.split(",") if uid.strip()]
+
+    # --- Verifica che la business line non esista già -------------------------
+
+    if not config_file.exists():
+        console.print(f"[red]Config non trovato: {config_file}[/red]")
+        raise typer.Exit(1)
+
+    raw = _json.loads(config_file.read_text(encoding="utf-8"))
+    business_lines: dict = raw.setdefault("businessLines", {})
+
+    if bl_id in business_lines:
+        console.print(f"[red]Business line '{bl_id}' esiste già in config.[/red]")
+        raise typer.Exit(1)
+
+    # --- Conferma finale ------------------------------------------------------
+
+    console.print(f"\n[bold]Riepilogo:[/bold]")
+    console.print(f"  ID:            {bl_id}")
+    console.print(f"  Nome:          {display_name}")
+    console.print(f"  Container tag: {container_tag}")
+    console.print(f"  Bot Telegram:  {'configurato' if telegram_token else 'non configurato'}")
+    console.print(f"  allowFrom:     {', '.join(allow_from)}")
+    console.print(f"  Workspace:     {ws_path / bl_id}")
+    console.print()
+
+    if not typer.confirm("Procedi?", default=True):
+        console.print("[yellow]Annullato.[/yellow]")
+        raise typer.Exit(0)
+
+    # --- 1. Aggiorna config.json (businessLines) ------------------------------
+
+    business_lines[bl_id] = {
+        "name": display_name,
+        "containerTag": container_tag,
+        "staticProfile": f"TODO: profilo di {display_name}. Compilare manualmente.",
+        "skills": ["*"],
+    }
+
+    # --- 2. Aggiorna config.json (Telegram bot) --------------------------------
+
+    if telegram_token:
+        channels = raw.setdefault("channels", {})
+        tg = channels.setdefault("telegram", {})
+        bots: list = tg.setdefault("bots", [])
+        bots.append({
+            "token": telegram_token,
+            "businessLine": bl_id,
+            "allowFrom": allow_from,
+        })
+
+    config_file.write_text(_json.dumps(raw, indent=2, ensure_ascii=False), encoding="utf-8")
+    console.print(f"[green]✓[/green] config.json aggiornato")
+
+    # --- 3. Crea cartella workspace -------------------------------------------
+
+    bl_dir = ws_path / bl_id
+    today = _date.today().isoformat()
+
+    for subdir in ("ideas", "specs", "workflows"):
+        (bl_dir / subdir).mkdir(parents=True, exist_ok=True)
+
+    state_content = f"""# State: {bl_id}
+
+Last update: {today}
+Maintained by: nanobot (auto-updated)
+
+## Active Ideas
+(none)
+
+## Active Workflows
+(none)
+
+## Recent Decisions
+(none)
+
+## Notes
+(empty)
+"""
+    (bl_dir / "_state.md").write_text(state_content, encoding="utf-8")
+
+    personas_content = f"""# Personas: {bl_id}
+
+> Archetipi cliente reali per questa business line.
+> Usati dal Council come "voce cliente".
+> Da compilare manualmente con dati veri o ben pensati.
+
+## Persona 1 — TODO
+
+Demografia:
+Psicografia:
+Tool che usa:
+Frustrazioni reali:
+Cosa lo fa cliccare:
+"""
+    (bl_dir / "_personas.md").write_text(personas_content, encoding="utf-8")
+
+    console.print(f"[green]✓[/green] Cartella workspace creata: {bl_dir}")
+
+    # --- 4. Aggiorna ORCHESTRATION.md ----------------------------------------
+
+    orch_path = ws_path / "ORCHESTRATION.md"
+    if orch_path.exists():
+        orch = orch_path.read_text(encoding="utf-8")
+
+        new_bl_section = (
+            f"\n### {bl_id}\n"
+            f"- Workflows live: 0\n"
+            f"- Specs in pipeline: 0\n"
+            f"- Ideas in brainstorming: 0\n"
+            f"- Last Council: -\n"
+        )
+
+        # Inserisci prima di "## Recent events" se esiste, altrimenti in fondo
+        if "## Recent events" in orch:
+            orch = orch.replace("## Recent events", new_bl_section + "\n## Recent events", 1)
+        else:
+            orch += new_bl_section
+
+        # Aggiorna Last update
+        orch = _re.sub(
+            r"^(Last update:\s*).*$",
+            lambda m: f"{m.group(1)}{today}T00:00:00+02:00",
+            orch, count=1, flags=_re.MULTILINE,
+        )
+
+        orch_path.write_text(orch, encoding="utf-8")
+        console.print(f"[green]✓[/green] ORCHESTRATION.md aggiornato")
+    else:
+        console.print(f"[dim]ORCHESTRATION.md non trovato in {ws_path} — saltato[/dim]")
+
+    # --- Output finale --------------------------------------------------------
+
+    console.print(f"\n[bold green]Business line '{bl_id}' creata.[/bold green]")
+    if telegram_token:
+        console.print(f"[green]✓[/green] Bot Telegram configurato")
+    console.print(f"\n[dim]Prossimi passi:[/dim]")
+    console.print(f"  1. Compila [cyan]{bl_dir}/_personas.md[/cyan] con archetipi cliente reali")
+    console.print(f"  2. Riavvia il gateway: [cyan]nanobot gateway[/cyan]")
+    if not telegram_token:
+        console.print(f"  3. Crea un bot su @BotFather e aggiungi il token a config.json sotto channels.telegram.bots")
+
+
 # ============================================================================
 # Ship-workflow command
 # ============================================================================
