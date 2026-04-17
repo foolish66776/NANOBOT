@@ -134,7 +134,7 @@ class ShipPipeline:
                 continue
 
             self._p(f"Step 3/4 — review-workflow (DeepSeek V3.2, iterazione {iteration})...")
-            last_report, last_verdict = await review_workflow(
+            last_report, last_verdict, corrected = await review_workflow(
                 spec_content=spec.raw_content,
                 workflow_json_str=json.dumps(last_workflow, indent=2, ensure_ascii=False),
                 router=self.router,
@@ -147,9 +147,27 @@ class ShipPipeline:
                 self._p("Review STOP — pipeline bloccato.")
                 break
             else:
-                # DA RIFARE: estrai il feedback e riprova
-                feedback = _extract_review_feedback(last_report)
-                self._p(f"Review DA RIFARE — nuova build con feedback.")
+                # DA RIFARE: usa il JSON corretto da DeepSeek se disponibile e valido
+                if corrected:
+                    fix_errors = validate_n8n_json(corrected)
+                    if not fix_errors:
+                        self._p("Review DA RIFARE — DeepSeek ha corretto il JSON direttamente.")
+                        last_workflow = corrected
+                        last_path.write_text(
+                            json.dumps(corrected, indent=2, ensure_ascii=False), encoding="utf-8"
+                        )
+                        last_verdict = "APPROVABILE"
+                        break
+                    else:
+                        self._p(
+                            f"Review DA RIFARE — correzione DeepSeek ha {len(fix_errors)} errori residui, "
+                            f"rebuild MiniMax con feedback."
+                        )
+                        feedback = _extract_review_feedback(last_report)
+                else:
+                    # Nessun JSON corretto: feedback a MiniMax
+                    feedback = _extract_review_feedback(last_report)
+                    self._p(f"Review DA RIFARE — rebuild MiniMax con feedback.")
 
         return last_workflow, last_path, last_report, last_verdict
 

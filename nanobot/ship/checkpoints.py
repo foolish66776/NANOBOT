@@ -10,6 +10,7 @@ Ogni checkpoint legge il proprio prompt da ~/.nanobot/supervisor-prompts/.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -82,12 +83,13 @@ async def review_workflow(
     spec_content: str,
     workflow_json_str: str,
     router: LLMRouter | None = None,
-) -> tuple[str, Verdict]:
-    """Chiama DeepSeek per verificare il workflow JSON generato contro la spec.
+) -> tuple[str, Verdict, dict | None]:
+    """Chiama DeepSeek per verificare e, se DA RIFARE, correggere il workflow JSON.
 
     Returns:
-        (report_text, verdict)
-        verdict: APPROVABILE | DA RIFARE | STOP
+        (report_text, verdict, corrected_workflow_or_None)
+        - corrected_workflow: dict JSON corretto da DeepSeek, presente solo se DA RIFARE
+        - verdict: APPROVABILE | DA RIFARE | STOP
     """
     r = router or LLMRouter()
     system = _load_prompt("review-workflow")
@@ -100,11 +102,34 @@ async def review_workflow(
         f"\n\nVerifica la conformità seguendo le istruzioni del tuo sistema."
     )
 
-    report = await r.complete(role="review_workflow", system=system, user=user, max_tokens=4000)
+    report = await r.complete(role="review_workflow", system=system, user=user, max_tokens=6000)
 
     verdict = _extract_verdict(report, ["APPROVABILE", "DA RIFARE", "STOP"])
     logger.info("review-workflow verdetto: {}", verdict)
-    return report, verdict  # type: ignore[return-value]
+
+    corrected: dict | None = None
+    if verdict == "DA RIFARE":
+        corrected = _extract_corrected_json(report)
+        if corrected:
+            logger.info("review-workflow: JSON corretto estratto dalla risposta DeepSeek")
+        else:
+            logger.warning("review-workflow: DA RIFARE ma nessun JSON corretto trovato nella risposta")
+
+    return report, verdict, corrected  # type: ignore[return-value]
+
+
+def _extract_corrected_json(report: str) -> dict | None:
+    """Estrae il JSON corretto dal report di review, se presente."""
+    import re as _re
+    matches = list(_re.finditer(r"```json\s*(\{.*?\})\s*```", report, _re.DOTALL))
+    if not matches:
+        return None
+    raw = matches[-1].group(1).strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        logger.warning("review-workflow: JSON corretto non parsabile: {}", exc)
+        return None
 
 
 # ---------------------------------------------------------------------------
