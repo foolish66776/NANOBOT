@@ -14,6 +14,7 @@ from loguru import logger
 from nanobot.llm.router import LLMRouter
 
 _N8N_RULES_PATH = Path("~/.nanobot/n8n-rules.md").expanduser()
+_EXAMPLES_DIR = Path("~/.nanobot/workflow-examples").expanduser()
 
 _BUILD_SYSTEM_BASE = """Sei un esperto di n8n (versione 1.x) specializzato nella generazione di workflow JSON.
 
@@ -29,29 +30,35 @@ Il tuo compito è leggere una workflow-spec.md e produrre un JSON valido per n8n
 6. Il trigger deve corrispondere esattamente a quello dichiarato nella spec (cron expression, webhook path, ecc.).
 7. Non aggiungere nodi non dichiarati nella spec.
 
-## Formato connections (chiavi = nome del nodo, NON l'id)
-
-```json
-{
-  "connections": {
-    "Nome Nodo A": {
-      "main": [[{"node": "Nome Nodo B", "type": "main", "index": 0}]]
-    }
-  }
-}
-```
-
 Rispondi SOLO con il JSON del workflow, nient'altro.
 """
 
 
+def _load_examples() -> str:
+    """Carica i workflow di esempio validati da ~/.nanobot/workflow-examples/."""
+    if not _EXAMPLES_DIR.exists():
+        return ""
+    examples = []
+    for path in sorted(_EXAMPLES_DIR.glob("*.json")):
+        try:
+            content = path.read_text(encoding="utf-8")
+            examples.append(f"### Esempio: {path.stem}\n```json\n{content}\n```")
+        except Exception:
+            pass
+    if not examples:
+        return ""
+    return "\n\n---\n\n## Esempi di workflow validati e funzionanti\n\nUsa questi come riferimento concreto per struttura, typeVersion, connections e credentials.\n\n" + "\n\n".join(examples)
+
+
 def _build_system_prompt() -> str:
-    """Assembla il system prompt iniettando le regole tecniche n8n aggiornate."""
+    """Assembla il system prompt con regole tecniche + esempi validati."""
+    prompt = _BUILD_SYSTEM_BASE
     if _N8N_RULES_PATH.exists():
-        rules = _N8N_RULES_PATH.read_text(encoding="utf-8")
-        return _BUILD_SYSTEM_BASE + f"\n\n---\n\n{rules}"
-    logger.warning("n8n-rules.md non trovato in {}", _N8N_RULES_PATH)
-    return _BUILD_SYSTEM_BASE
+        prompt += f"\n\n---\n\n{_N8N_RULES_PATH.read_text(encoding='utf-8')}"
+    else:
+        logger.warning("n8n-rules.md non trovato in {}", _N8N_RULES_PATH)
+    prompt += _load_examples()
+    return prompt
 
 
 async def build_workflow(
