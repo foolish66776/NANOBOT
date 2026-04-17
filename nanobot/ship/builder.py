@@ -28,6 +28,7 @@ Il tuo compito è leggere una workflow-spec.md e produrre un JSON valido per n8n
 7. Il trigger deve corrispondere esattamente a quello dichiarato nella spec (cron expression, webhook path, ecc.).
 8. La timezone va SOLO in `settings.timezone` a livello workflow. NON metterla nei parametri di nessun nodo. Esempio corretto: `"settings": {"executionOrder": "v1", "timezone": "Europe/Rome"}`.
 9. Per lo Schedule Trigger usa SEMPRE `typeVersion: 1.2` e `"field": "cronExpression"` (NON "field": "cron"). Esempio corretto per un cron alle 7:30: `{"rule": {"interval": [{"field": "cronExpression", "expression": "30 7 * * *"}]}}`.
+10. Per nodi HTTP Request GET con query parameters: incorpora i parametri direttamente nell'URL (es. `"url": "https://api.example.com/endpoint?param1=val1&param2=val2"`). NON usare il campo `queryParameters` separato — causa "Invalid JSON in response body" in n8n.
 10. Nel campo `connections`, usa il valore del campo `name` del nodo come chiave (NON il campo `id`).
 11. Non aggiungere nodi non dichiarati nella spec.
 
