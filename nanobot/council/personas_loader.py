@@ -78,6 +78,65 @@ def load_business_personas(
     return ""
 
 
+_DEFAULT_PERSONAS_LIBRARY = Path("~/dev/nanobot-workspace/_personas-library").expanduser()
+
+
+def load_spec_persona(
+    persona_ref: str,
+    library_dir: Path | None = None,
+) -> str:
+    """Carica un persona dalla _personas-library/ dato il suo slug.
+
+    Args:
+        persona_ref: Slug del file (es. commercialista-novara-52), senza .md
+        library_dir: Override per la library directory
+
+    Returns:
+        Contenuto del file persona, o stringa vuota se non trovato.
+    """
+    if not persona_ref:
+        return ""
+    lib = library_dir or _DEFAULT_PERSONAS_LIBRARY
+    path = lib / f"{persona_ref}.md"
+    if path.exists():
+        logger.info("Persona library caricato: {}", path)
+        return path.read_text(encoding="utf-8")
+    logger.warning("Persona '{}' non trovato in library: {}", persona_ref, lib)
+    return ""
+
+
+def register_spec_in_persona(
+    persona_ref: str,
+    spec_id: str,
+    library_dir: Path | None = None,
+) -> None:
+    """Aggiorna il campo 'Riutilizzato da:' nel file persona quando una spec lo referenzia."""
+    if not persona_ref:
+        return
+    lib = library_dir or _DEFAULT_PERSONAS_LIBRARY
+    path = lib / f"{persona_ref}.md"
+    if not path.exists():
+        return
+    import re
+    content = path.read_text(encoding="utf-8")
+    # Se spec_id è già listato, non duplicare
+    if spec_id in content:
+        return
+    content = re.sub(
+        r"^(Riutilizzato da:\s*)(.*)$",
+        lambda m: (
+            f"{m.group(1)}{spec_id}"
+            if not m.group(2).strip()
+            else f"{m.group(1)}{m.group(2).strip()}, {spec_id}"
+        ),
+        content,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    path.write_text(content, encoding="utf-8")
+    logger.info("Persona '{}' aggiornato con spec '{}'", persona_ref, spec_id)
+
+
 def inject_customer_personas(
     voce_cliente_prompt: str,
     customer_personas: str,

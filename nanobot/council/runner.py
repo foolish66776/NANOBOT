@@ -15,6 +15,8 @@ from nanobot.council.personas_loader import (
     load_business_personas,
     load_judge_prompt,
     load_persona_prompts,
+    load_spec_persona,
+    register_spec_in_persona,
 )
 from nanobot.council.types import CouncilResult, PersonaResponse, WorkflowSpec
 from nanobot.llm.router import LLMRouter
@@ -52,8 +54,18 @@ async def run_council(
     r = router or LLMRouter()
 
     persona_prompts = load_persona_prompts(personas_dir)
-    customer_personas = load_business_personas(spec.business_line, workspace)
     judge_prompt = load_judge_prompt(personas_dir)
+
+    # Carica persona: prima dalla library (se spec ha persona_ref), poi da _personas.md
+    if spec.persona_ref:
+        customer_personas = load_spec_persona(spec.persona_ref)
+        if customer_personas:
+            register_spec_in_persona(spec.persona_ref, spec.spec_id)
+        else:
+            # fallback a _personas.md della business line
+            customer_personas = load_business_personas(spec.business_line, workspace)
+    else:
+        customer_personas = load_business_personas(spec.business_line, workspace)
 
     # Inietta customer personas in voce-cliente
     persona_prompts["voce-cliente"] = inject_customer_personas(

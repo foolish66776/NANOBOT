@@ -28,6 +28,9 @@ class WorkflowSpec:
     path: str
     """Path assoluto del file."""
 
+    persona_ref: str = ""
+    """Slug del persona file in _personas-library/ (es. commercialista-novara-52)."""
+
     @classmethod
     def from_file(cls, path: str) -> "WorkflowSpec":
         """Legge e parsa un file workflow-spec.md."""
@@ -42,6 +45,7 @@ class WorkflowSpec:
         title = _extract_title(content) or spec_id
         business_line = _extract_field(content, "Business line:") or "unknown"
         status = _extract_field(content, "Status:") or "draft"
+        persona_ref = _extract_field(content, "Persona ref:") or ""
 
         return cls(
             spec_id=spec_id,
@@ -50,6 +54,7 @@ class WorkflowSpec:
             status=status,
             raw_content=content,
             path=str(p),
+            persona_ref=persona_ref,
         )
 
 
