@@ -116,6 +116,8 @@ class WebSearchTool(Tool):
             return await self._search_brave(query, n)
         elif provider == "kagi":
             return await self._search_kagi(query, n)
+        elif provider == "firecrawl":
+            return await self._search_firecrawl(query, n)
         else:
             return f"Error: unknown search provider '{provider}'"
 
@@ -229,6 +231,29 @@ class WebSearchTool(Tool):
         except Exception as e:
             return f"Error: {e}"
 
+    async def _search_firecrawl(self, query: str, n: int) -> str:
+        api_key = self.config.api_key or os.environ.get("FIRECRAWL_API_KEY", "")
+        if not api_key:
+            logger.warning("FIRECRAWL_API_KEY not set, falling back to DuckDuckGo")
+            return await self._search_duckduckgo(query, n)
+        try:
+            async with httpx.AsyncClient(proxy=self.proxy, timeout=20.0) as client:
+                r = await client.post(
+                    "https://api.firecrawl.dev/v1/search",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={"query": query, "limit": n},
+                )
+                r.raise_for_status()
+            results = r.json().get("data", [])
+            items = [
+                {"title": d.get("title", ""), "url": d.get("url", ""), "content": d.get("description", "") or d.get("markdown", "")[:300]}
+                for d in results
+            ]
+            return _format_results(query, items, n)
+        except Exception as e:
+            logger.warning("Firecrawl search failed ({}), falling back to DuckDuckGo", e)
+            return await self._search_duckduckgo(query, n)
+
     async def _search_duckduckgo(self, query: str, n: int) -> str:
         try:
             # Note: duckduckgo_search is synchronous and does its own requests
@@ -306,10 +331,54 @@ class WebFetchTool(Tool):
         except Exception as e:
             logger.debug("Pre-fetch image detection failed for {}: {}", url, e)
 
+        # Firecrawl: primary scraper when API key is set (handles JS-heavy pages)
+        if os.environ.get("FIRECRAWL_API_KEY"):
+            result = await self._fetch_firecrawl(url, max_chars)
+            if result is not None:
+                return result
+
         result = await self._fetch_jina(url, max_chars)
         if result is None:
             result = await self._fetch_readability(url, extractMode, max_chars)
         return result
+
+    async def _fetch_firecrawl(self, url: str, max_chars: int) -> str | None:
+        """Scrape via Firecrawl API. Returns None on failure (fallback to Jina)."""
+        api_key = os.environ.get("FIRECRAWL_API_KEY", "")
+        try:
+            async with httpx.AsyncClient(proxy=self.proxy, timeout=30.0) as client:
+                r = await client.post(
+                    "https://api.firecrawl.dev/v1/scrape",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={"url": url, "formats": ["markdown"]},
+                )
+                if r.status_code == 429:
+                    logger.debug("Firecrawl rate limited, falling back to Jina")
+                    return None
+                r.raise_for_status()
+
+            data = r.json().get("data", {})
+            text = data.get("markdown", "") or data.get("content", "")
+            if not text:
+                return None
+
+            title = data.get("metadata", {}).get("title", "")
+            if title:
+                text = f"# {title}\n\n{text}"
+            truncated = len(text) > max_chars
+            if truncated:
+                text = text[:max_chars]
+            text = f"{_UNTRUSTED_BANNER}\n\n{text}"
+
+            return json.dumps({
+                "url": url, "finalUrl": data.get("metadata", {}).get("sourceURL", url),
+                "status": r.status_code, "extractor": "firecrawl",
+                "truncated": truncated, "length": len(text),
+                "untrusted": True, "text": text,
+            }, ensure_ascii=False)
+        except Exception as e:
+            logger.debug("Firecrawl scrape failed for {}, falling back to Jina: {}", url, e)
+            return None
 
     async def _fetch_jina(self, url: str, max_chars: int) -> str | None:
         """Try fetching via Jina Reader API. Returns None on failure."""
