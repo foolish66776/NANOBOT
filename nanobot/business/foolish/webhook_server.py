@@ -62,13 +62,17 @@ class WebhookHandler:
                 logger.warning("WooCommerce webhook: invalid signature")
                 return web.Response(status=401, text="Invalid signature")
 
+        topic = request.headers.get("X-WC-Webhook-Topic", "")
+        logger.info("WooCommerce webhook received: topic={} content-type={} body_len={} body_preview={}",
+                    topic, request.content_type, len(body), body[:200])
+
         try:
             payload = json.loads(body)
         except Exception:
-            return web.Response(status=400, text="Invalid JSON")
+            logger.warning("WooCommerce webhook: non-JSON body, ignoring (topic={})", topic)
+            return web.Response(status=200, text="ok")
 
-        topic = request.headers.get("X-WC-Webhook-Topic", "")
-        logger.info("WooCommerce webhook received: topic={} order={}", topic, payload.get("id"))
+        logger.info("WooCommerce webhook parsed: topic={} order={}", topic, payload.get("id"))
 
         pool = request.app["pool"]
         cfg = request.app["cfg"]
