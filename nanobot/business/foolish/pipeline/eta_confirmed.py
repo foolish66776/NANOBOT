@@ -6,7 +6,7 @@ from loguru import logger
 
 from ..config import FoolishConfig
 from ..db import MessageRepo, OrderRepo
-from ..telegram import send_to_customer, send_to_alessandro
+from ..telegram import deep_link_url, send_to_customer, send_to_alessandro
 
 
 PRE_PRODUCTION_TEMPLATE = """\
@@ -58,11 +58,15 @@ async def handle_eta_confirmed(
         logger.info("Pre-production message sent to customer for order {}", order_id)
     else:
         # Customer not linked yet — send draft to Alessandro for manual forwarding
+        link_line = ""
+        if cfg.telegram_bot_username:
+            link = deep_link_url(cfg.telegram_bot_username, order_id)
+            link_line = f"\n\n🔗 Allega questo link al cliente per collegare Telegram:\n{link}"
+
         draft_alert = (
             f"✉️ <b>Bozza messaggio pre-produzione</b> (ordine #{order_id})\n\n"
             f"Il cliente non ha ancora collegato Telegram. Invia tu questo messaggio via email:\n\n"
-            f"<pre>{body}</pre>\n\n"
-            f"Per collegarlo: <code>/link {order_id} @username_telegram</code>"
+            f"<pre>{body}</pre>{link_line}"
         )
         await send_to_alessandro(cfg, draft_alert)
         await message_repo.create(

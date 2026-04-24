@@ -22,6 +22,7 @@ from .pipeline.order_received import handle_order_received
 from .telegram import (
     download_telegram_file,
     photo_archive_keyboard,
+    send_message,
     send_photo_url,
     send_to_alessandro,
 )
@@ -226,20 +227,63 @@ async def _handle_photo_archive_callback(data: str, cfg: FoolishConfig, pool) ->
         await send_to_alessandro(cfg, "🗑️ Foto eliminata da R2.")
 
 
-async def _handle_message(message: dict, cfg: FoolishConfig, pool) -> None:
-    """Handle messages from Alessandro: text commands and photo uploads."""
+async def _handle_customer_start(message: dict, order_id: int, cfg: FoolishConfig, pool) -> None:
+    """Customer clicked deep link /start order_<id> — link Telegram ID to order."""
     from_id = message.get("from", {}).get("id")
+    first_name = message.get("from", {}).get("first_name", "")
+
+    order_repo = OrderRepo(pool)
+    order = await order_repo.get(order_id)
+
+    if order is None:
+        await send_message(
+            cfg.telegram_bot_token, from_id,
+            "Non ho trovato l'ordine associato a questo link. Contatta Alessandro."
+        )
+        logger.warning("Customer /start with unknown order_id={}", order_id)
+        return
+
+    await order_repo.set_customer_telegram_id(order_id, from_id)
+    logger.info("Customer linked for order {}: telegram_id={} name={}", order_id, from_id, first_name)
+
+    customer_first = (order.customer_name or "").split()[0] if order.customer_name else (first_name or "ciao")
+    await send_message(
+        cfg.telegram_bot_token, from_id,
+        f"Ciao {customer_first}! 👋\n\n"
+        f"Sei collegato all'ordine #{order_id}.\n"
+        f"Riceverai qui aggiornamenti diretti da Alessandro.",
+    )
+
+    await send_to_alessandro(
+        cfg,
+        f"🔗 <b>Cliente collegato!</b>\n"
+        f"Ordine #{order_id} — {order.customer_name or order.customer_email}\n"
+        f"Telegram ID: <code>{from_id}</code> | Nome: {first_name}",
+    )
+
+
+async def _handle_message(message: dict, cfg: FoolishConfig, pool) -> None:
+    """Handle messages: /start deep link (any user) + Alessandro commands and photo uploads."""
+    from_id = message.get("from", {}).get("id")
+    text = (message.get("text") or "").strip()
+
+    # /start order_<id> — handle from ANY user (customer onboarding via deep link)
+    if text.startswith("/start"):
+        param = text[len("/start"):].strip()
+        if param.startswith("order_"):
+            id_str = param[len("order_"):]
+            if id_str.isdigit():
+                await _handle_customer_start(message, int(id_str), cfg, pool)
+        return
 
     if from_id != cfg.alessandro_chat_id:
         return
 
-    # Photo upload flow
+    # Photo upload flow (Alessandro only)
     photo_list = message.get("photo")
     if photo_list:
         await _handle_photo_message(message, photo_list, cfg, pool)
         return
-
-    text = (message.get("text") or "").strip()
 
     if text.startswith("/link"):
         parts = text.split()

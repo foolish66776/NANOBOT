@@ -76,6 +76,11 @@ async def send_photo_url(
         return resp.json()
 
 
+def deep_link_url(bot_username: str, order_id: int) -> str:
+    """Generate a Telegram deep link that starts the bot with /start order_<id>."""
+    return f"https://t.me/{bot_username}?start=order_{order_id}"
+
+
 def photo_archive_keyboard(message_id: str) -> dict:
     """Inline keyboard asking Alessandro whether to archive the photo."""
     return {

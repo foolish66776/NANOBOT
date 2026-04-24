@@ -8,7 +8,7 @@ from loguru import logger
 
 from ..config import FoolishConfig
 from ..db import MessageRepo, OrderRepo
-from ..telegram import eta_inline_keyboard, send_to_alessandro
+from ..telegram import deep_link_url, eta_inline_keyboard, send_to_alessandro
 
 
 async def handle_order_received(
@@ -57,11 +57,16 @@ async def handle_order_received(
         f"  • {item['name']} × {item['quantity']}" for item in line_items
     ) or "  (nessun prodotto)"
 
+    link_line = ""
+    if cfg.telegram_bot_username:
+        link = deep_link_url(cfg.telegram_bot_username, order.id)
+        link_line = f"\n🔗 <b>Link Telegram cliente:</b> <a href=\"{link}\">{link}</a>"
+
     alert_text = (
         f"🛒 <b>Nuovo ordine #{order.id}</b>\n\n"
         f"👤 {customer_name or 'N/D'} — {customer_email}\n"
         f"💶 {order.total:.2f} {order.currency}\n\n"
-        f"<b>Prodotti:</b>\n{items_text}\n\n"
+        f"<b>Prodotti:</b>\n{items_text}{link_line}\n\n"
         f"<b>Quanto tempo di produzione?</b>"
     )
 
