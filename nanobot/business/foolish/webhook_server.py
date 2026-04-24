@@ -33,6 +33,7 @@ def build_app(cfg: FoolishConfig) -> web.Application:
     handler = WebhookHandler(cfg)
     app.router.add_get("/health/foolish", handler.health)
     app.router.add_post("/hooks/woocommerce", handler.woocommerce)
+    app.router.add_get("/hooks/packlink", handler.packlink_ping)   # Packlink URL validation
     app.router.add_post("/hooks/packlink", handler.packlink)
     app.router.add_post("/hooks/telegram/foolish", handler.telegram_update)
     app.on_startup.append(lambda _app: _startup(_app, cfg))
@@ -88,6 +89,10 @@ class WebhookHandler:
         if topic in ("order.created", "order.updated"):
             await handle_order_received(payload, cfg, order_repo, message_repo)
 
+        return web.Response(status=200, text="ok")
+
+    async def packlink_ping(self, request: web.Request) -> web.Response:
+        """GET /hooks/packlink — Packlink URL validation ping."""
         return web.Response(status=200, text="ok")
 
     async def packlink(self, request: web.Request) -> web.Response:

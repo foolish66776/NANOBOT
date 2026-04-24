@@ -335,6 +335,8 @@ class FoolishPacklinkSetupTool(Tool):
             # Register new hooks
             results = await register_webhook(cfg.packlink_api_key, cfg.packlink_base_url, callback_url)
 
+            all_failed = all(r["status"] != "ok" for r in results)
+
             lines = [f"**Webhook URL target:** `{callback_url}`\n"]
             if existing_urls:
                 lines.append("**Già registrati:**")
@@ -343,8 +345,17 @@ class FoolishPacklinkSetupTool(Tool):
             lines.append("**Registrazione eventi:**")
             for r in results:
                 icon = "✅" if r["status"] == "ok" else "❌"
+                path_info = f" (via {r['path']})" if r.get("path") else ""
                 detail = f" — {r.get('code', r.get('error', ''))}" if r["status"] != "ok" else ""
-                lines.append(f"  {icon} {r['event']}{detail}")
+                lines.append(f"  {icon} {r['event']}{path_info}{detail}")
+
+            if all_failed:
+                lines += [
+                    "",
+                    "⚠️ **Registrazione API non riuscita.** Configura manualmente nel dashboard Packlink Pro:",
+                    f"  Settings → Integrations → Webhooks → Add URL: `{callback_url}`",
+                    "  Seleziona tutti gli eventi di tracking disponibili.",
+                ]
 
             return "\n".join(lines)
 

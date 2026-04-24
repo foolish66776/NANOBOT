@@ -12,41 +12,73 @@ def _headers(api_key: str) -> dict:
     return {"Authorization": f"Apikey {api_key}", "Content-Type": "application/json"}
 
 
+_WEBHOOK_EVENTS = [
+    "shipment_trackingUpdated",
+    "shipment_delivered",
+    "shipment_incidence",
+]
+
+# Packlink Pro API uses /webhook (singular) for registration, /webhooks (plural) for listing.
+# Some plan tiers respond 404 on API registration — in that case configure manually in the dashboard.
+_REGISTER_PATHS = ["/webhook", "/hooks", "/webhooks"]
+_LIST_PATHS = ["/webhooks", "/hooks", "/webhook"]
+
+
 async def register_webhook(api_key: str, base_url: str, callback_url: str) -> list[dict]:
     """Register our callback URL for all tracking events. Returns list of created hooks."""
-    events = [
-        "shipment_trackingUpdated",
-        "shipment_delivered",
-        "shipment_incidence",
-    ]
     created = []
     async with httpx.AsyncClient(timeout=15) as client:
-        for event in events:
-            try:
-                resp = await client.post(
-                    f"{base_url}/hooks",
-                    json={"event": event, "url": callback_url},
-                    headers=_headers(api_key),
-                )
-                if resp.status_code in (200, 201):
-                    created.append({"event": event, "status": "ok"})
-                    logger.info("Packlink webhook registered: event={} url={}", event, callback_url)
-                else:
-                    created.append({"event": event, "status": "error", "code": resp.status_code, "body": resp.text[:200]})
-                    logger.warning("Packlink webhook registration failed: event={} status={} body={}", event, resp.status_code, resp.text[:200])
-            except Exception as exc:
-                created.append({"event": event, "status": "error", "error": str(exc)})
-                logger.error("Packlink webhook registration error: event={} exc={}", event, exc)
+        for event in _WEBHOOK_EVENTS:
+            result: dict | None = None
+            for path in _REGISTER_PATHS:
+                try:
+                    resp = await client.post(
+                        f"{base_url}{path}",
+                        json={"event": event, "url": callback_url},
+                        headers=_headers(api_key),
+                    )
+                    if resp.status_code in (200, 201):
+                        result = {"event": event, "status": "ok", "path": path}
+                        logger.info("Packlink webhook registered: event={} url={} via {}", event, callback_url, path)
+                        break
+                    elif resp.status_code == 404:
+                        logger.debug("Packlink {} → 404, trying next path", path)
+                        continue
+                    else:
+                        result = {
+                            "event": event, "status": "error",
+                            "code": resp.status_code, "body": resp.text[:300],
+                        }
+                        logger.warning("Packlink webhook registration failed: event={} status={} body={}", event, resp.status_code, resp.text[:300])
+                        break
+                except Exception as exc:
+                    result = {"event": event, "status": "error", "error": str(exc)}
+                    logger.error("Packlink webhook registration error: event={} exc={}", event, exc)
+                    break
+
+            if result is None:
+                result = {
+                    "event": event, "status": "error",
+                    "code": 404, "body": "All paths returned 404 — configure webhook manually in Packlink dashboard.",
+                }
+            created.append(result)
     return created
 
 
 async def list_webhooks(api_key: str, base_url: str) -> list[dict]:
     """List currently registered Packlink webhooks."""
     async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.get(f"{base_url}/hooks", headers=_headers(api_key))
-        resp.raise_for_status()
-        data = resp.json()
-        return data.get("data", data) if isinstance(data, dict) else data
+        for path in _LIST_PATHS:
+            try:
+                resp = await client.get(f"{base_url}{path}", headers=_headers(api_key))
+                if resp.status_code == 404:
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                return data.get("data", data) if isinstance(data, dict) else data
+            except httpx.HTTPStatusError:
+                continue
+    return []
 
 
 async def get_shipment(api_key: str, base_url: str, reference: str) -> dict[str, Any]:
