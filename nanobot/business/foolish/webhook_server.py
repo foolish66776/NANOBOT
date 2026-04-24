@@ -19,7 +19,12 @@ from .config import FoolishConfig
 from .db import MessageRepo, OrderRepo, get_pool
 from .pipeline.eta_confirmed import handle_eta_confirmed
 from .pipeline.order_received import handle_order_received
-from .telegram import send_to_alessandro
+from .telegram import (
+    download_telegram_file,
+    photo_archive_keyboard,
+    send_photo_url,
+    send_to_alessandro,
+)
 
 
 def build_app(cfg: FoolishConfig) -> web.Application:
@@ -149,12 +154,16 @@ class WebhookHandler:
 
 
 async def _handle_callback(callback: dict, cfg: FoolishConfig, pool) -> None:
-    """Process inline keyboard callbacks from Alessandro (ETA selection)."""
+    """Process inline keyboard callbacks from Alessandro (ETA, matching, photo archive)."""
     data = callback.get("data", "")
     from_id = callback.get("from", {}).get("id")
 
     if from_id != cfg.alessandro_chat_id:
         return  # Ignore callbacks from other users
+
+    if data.startswith("photo_archive:"):
+        await _handle_photo_archive_callback(data, cfg, pool)
+        return
 
     if data.startswith("eta:"):
         parts = data.split(":")
@@ -182,13 +191,55 @@ async def _handle_callback(callback: dict, cfg: FoolishConfig, pool) -> None:
             )
 
 
+async def _handle_photo_archive_callback(data: str, cfg: FoolishConfig, pool) -> None:
+    """Handle photo_archive:yes|no:<uuid> callbacks."""
+    from uuid import UUID
+    parts = data.split(":")
+    if len(parts) != 3:
+        return
+    _, decision, msg_id_str = parts
+    try:
+        msg_uuid = UUID(msg_id_str)
+    except ValueError:
+        return
+
+    if decision == "yes":
+        await pool.execute(
+            "UPDATE foolish.messages SET approved_by_alessandro = TRUE WHERE id = $1",
+            msg_uuid,
+        )
+        await send_to_alessandro(cfg, "✅ Foto archiviata su R2.")
+    elif decision == "no":
+        row = await pool.fetchrow(
+            "SELECT media_urls FROM foolish.messages WHERE id = $1", msg_uuid
+        )
+        if row and row["media_urls"]:
+            try:
+                from .r2 import delete_photo
+                await delete_photo(cfg, row["media_urls"][0])
+            except Exception as exc:
+                logger.warning("R2 delete failed: {}", exc)
+        await pool.execute(
+            "UPDATE foolish.messages SET approved_by_alessandro = FALSE WHERE id = $1",
+            msg_uuid,
+        )
+        await send_to_alessandro(cfg, "🗑️ Foto eliminata da R2.")
+
+
 async def _handle_message(message: dict, cfg: FoolishConfig, pool) -> None:
-    """Handle text messages from Alessandro (e.g. custom ETA reply, /link command)."""
+    """Handle messages from Alessandro: text commands and photo uploads."""
     from_id = message.get("from", {}).get("id")
-    text = (message.get("text") or "").strip()
 
     if from_id != cfg.alessandro_chat_id:
         return
+
+    # Photo upload flow
+    photo_list = message.get("photo")
+    if photo_list:
+        await _handle_photo_message(message, photo_list, cfg, pool)
+        return
+
+    text = (message.get("text") or "").strip()
 
     if text.startswith("/link"):
         parts = text.split()
@@ -223,6 +274,90 @@ async def _handle_message(message: dict, cfg: FoolishConfig, pool) -> None:
             cfg,
             f"Numero ricevuto: {text}. Specifica ordine con formato: eta <order_id> {text}",
         )
+
+
+async def _handle_photo_message(message: dict, photos: list, cfg: FoolishConfig, pool) -> None:
+    """Alessandro sent a photo. Parse order_id from caption, upload to R2, forward to customer."""
+    caption = (message.get("caption") or "").strip()
+
+    # Extract order_id from caption (any token that is a number, optionally prefixed with #)
+    order_id: int | None = None
+    for token in caption.split():
+        clean = token.lstrip("#")
+        if clean.isdigit():
+            order_id = int(clean)
+            break
+
+    if order_id is None:
+        await send_to_alessandro(
+            cfg,
+            "📎 Foto ricevuta. Risendila con il numero ordine come didascalia (es: <code>12345</code>).",
+        )
+        return
+
+    if not cfg.r2_endpoint or not cfg.r2_bucket:
+        await send_to_alessandro(cfg, "⚠️ R2 non configurato (FOOLISH_R2_ENDPOINT / FOOLISH_R2_BUCKET mancanti).")
+        return
+
+    # Select largest photo variant
+    best = max(photos, key=lambda p: p.get("width", 0) * p.get("height", 0))
+    file_id = best["file_id"]
+
+    try:
+        photo_bytes = await download_telegram_file(cfg.telegram_bot_token, file_id)
+    except Exception as exc:
+        logger.error("Photo download failed: {}", exc)
+        await send_to_alessandro(cfg, f"⚠️ Errore download foto da Telegram: {exc}")
+        return
+
+    try:
+        from .r2 import upload_photo
+        r2_url = await upload_photo(cfg, order_id, photo_bytes)
+    except Exception as exc:
+        logger.error("R2 upload failed: {}", exc)
+        await send_to_alessandro(cfg, f"⚠️ Errore upload R2: {exc}")
+        return
+
+    logger.info("Photo uploaded to R2 for order {}: {}", order_id, r2_url)
+
+    # Forward photo to customer if Telegram is linked
+    order_repo = OrderRepo(pool)
+    order = await order_repo.get(order_id)
+    sent_to_customer = False
+    if order and order.customer_telegram_id:
+        try:
+            first_name = (order.customer_name or "").split()[0] if order.customer_name else "ciao"
+            await send_photo_url(
+                cfg.telegram_bot_token,
+                order.customer_telegram_id,
+                r2_url,
+                caption=f"{first_name}, ecco il tuo ordine #{order_id} 🎨",
+            )
+            sent_to_customer = True
+        except Exception as exc:
+            logger.warning("Failed to send photo to customer: {}", exc)
+
+    # Save to messages table (approved_by_alessandro=None = pending decision)
+    message_repo = MessageRepo(pool)
+    msg_id = await message_repo.create(
+        order_id=order_id,
+        direction="outbound",
+        stage="photo_preview",
+        body=f"Foto ordine #{order_id}",
+        media_urls=[r2_url],
+        approved_by_alessandro=None,
+    )
+
+    customer_status = (
+        "✅ Foto inviata al cliente via Telegram."
+        if sent_to_customer
+        else "⚠️ Cliente senza Telegram collegato — foto non inviata."
+    )
+    await send_to_alessandro(
+        cfg,
+        f"{customer_status}\nArchivio la foto su R2?",
+        reply_markup=photo_archive_keyboard(str(msg_id)),
+    )
 
 
 def _verify_hmac(secret: bytes, body: bytes, signature: str) -> bool:

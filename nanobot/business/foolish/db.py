@@ -114,15 +114,20 @@ class MessageRepo:
         body: str,
         recipient: str | None = None,
         approved_by_alessandro: bool | None = None,
-    ) -> None:
-        await self._pool.execute(
+        media_urls: list[str] | None = None,
+    ) -> "UUID":
+        from uuid import UUID
+        row = await self._pool.fetchrow(
             """
             INSERT INTO foolish.messages
-                (order_id, direction, stage, body, recipient, approved_by_alessandro)
-            VALUES ($1, $2, $3, $4, $5, $6)
+                (order_id, direction, stage, body, recipient, approved_by_alessandro, media_urls)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            RETURNING id
             """,
             order_id, direction, stage, body, recipient, approved_by_alessandro,
+            media_urls or [],
         )
+        return row["id"]
 
     async def mark_sent(self, message_id: str) -> None:
         await self._pool.execute(

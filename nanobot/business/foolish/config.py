@@ -17,6 +17,11 @@ class FoolishConfig:
     trust_threshold_date: str
     followup_delay_days: int
     webhook_port: int
+    r2_endpoint: str
+    r2_bucket: str
+    r2_access_key_id: str
+    r2_secret_access_key: str
+    r2_public_url: str
 
     def __init__(self) -> None:
         self.database_url = _require("FOOLISH_DATABASE_URL")
@@ -29,6 +34,11 @@ class FoolishConfig:
         self.trust_threshold_date = os.environ.get("FOOLISH_TRUST_THRESHOLD_DATE", "2099-01-01")
         self.followup_delay_days = int(os.environ.get("FOOLISH_FOLLOWUP_DELAY_DAYS", "3"))
         self.webhook_port = int(os.environ.get("FOOLISH_WEBHOOK_PORT") or os.environ.get("PORT") or "8910")
+        self.r2_endpoint = os.environ.get("FOOLISH_R2_ENDPOINT", "")
+        self.r2_bucket = os.environ.get("FOOLISH_R2_BUCKET", "")
+        self.r2_access_key_id = os.environ.get("FOOLISH_R2_ACCESS_KEY_ID", "")
+        self.r2_secret_access_key = os.environ.get("FOOLISH_R2_SECRET_ACCESS_KEY", "")
+        self.r2_public_url = os.environ.get("FOOLISH_R2_PUBLIC_URL", "")
 
 
 def _require(key: str) -> str:
