@@ -14,7 +14,7 @@ from loguru import logger
 from pydantic import Field
 from telegram import BotCommand, ReactionTypeEmoji, ReplyParameters, Update
 from telegram.error import BadRequest, NetworkError, TimedOut
-from telegram.ext import Application, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from telegram.request import HTTPXRequest
 
 from nanobot.bus.events import OutboundMessage
@@ -231,6 +231,94 @@ class TelegramConfig(Base):
     stream_edit_interval: float = Field(default=_STREAM_EDIT_INTERVAL_DEFAULT, ge=0.1)
 
 
+async def _send_approved_preview(order_id: int, cfg, pool) -> None:
+    """Send the approved pre-shipment preview to the customer (or draft to Alessandro if not linked)."""
+    from nanobot.business.foolish.telegram import send_to_customer, send_to_alessandro as _send_ale
+    row = await pool.fetchrow(
+        "SELECT body, recipient FROM foolish.messages WHERE order_id = $1 AND stage = 'preview' AND approved_by_alessandro IS NULL ORDER BY created_at DESC LIMIT 1",
+        order_id,
+    )
+    if not row:
+        await _send_ale(cfg, f"⚠️ Bozza preview non trovata per ordine #{order_id}.")
+        return
+    body = row["body"]
+    # Get customer telegram id
+    order_row = await pool.fetchrow("SELECT customer_telegram_id, customer_email FROM foolish.orders WHERE id = $1", order_id)
+    tg_id = order_row["customer_telegram_id"] if order_row else None
+    if tg_id:
+        await send_to_customer(cfg, tg_id, body)
+        await pool.execute(
+            "UPDATE foolish.messages SET approved_by_alessandro = TRUE, sent_at = NOW() WHERE order_id = $1 AND stage = 'preview' AND approved_by_alessandro IS NULL",
+            order_id,
+        )
+        await _send_ale(cfg, f"✅ Preview inviata al cliente per ordine #{order_id}.")
+    else:
+        await _send_ale(cfg, f"ℹ️ Cliente ordine #{order_id} non ha Telegram collegato.\n\nInvia tu questo messaggio:\n\n<pre>{body}</pre>")
+
+
+async def _handle_foolish_callback(update, context) -> None:
+    """Route Telegram callback_query updates to the Foolish Butcher pipeline."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    data = query.data or ""
+    from_id = query.from_user.id if query.from_user else None
+
+    try:
+        import os
+        from nanobot.business.foolish.config import get_config
+        from nanobot.business.foolish.db import OrderRepo, MessageRepo, get_pool
+        from nanobot.business.foolish.pipeline.eta_confirmed import handle_eta_confirmed
+        from nanobot.business.foolish.telegram import send_to_alessandro
+
+        cfg = get_config()
+
+        if from_id != cfg.alessandro_chat_id:
+            return
+
+        parts = data.split(":")
+        if len(parts) < 3:
+            return
+        action_ns, order_id_str, action = parts[0], parts[1], parts[2]
+        order_id = int(order_id_str)
+        pool = await get_pool(cfg.database_url)
+
+        if action_ns == "eta":
+            if action == "custom":
+                await send_to_alessandro(
+                    cfg,
+                    f"Digita il numero di giorni per l'ordine #{order_id_str} (es: <code>eta {order_id_str} 12</code>):",
+                )
+                return
+            eta_days = int(action)
+            order_repo = OrderRepo(pool)
+            message_repo = MessageRepo(pool)
+            await handle_eta_confirmed(order_id, eta_days, cfg, order_repo, message_repo)
+            await send_to_alessandro(
+                cfg,
+                f"✅ ETA {eta_days}gg confermata per ordine #{order_id}. Messaggio pre-produzione inviato.",
+            )
+
+        elif action_ns == "match":
+            from nanobot.business.foolish.pipeline.matching import confirm_matching, reject_matching
+            if action == "approve":
+                await confirm_matching(order_id, cfg, pool)
+                await send_to_alessandro(cfg, f"✅ Matching ordine #{order_id} approvato. Fogli riservati. Bozza preview inviata.")
+            elif action == "reject":
+                await reject_matching(order_id, cfg, pool)
+
+        elif action_ns == "preview":
+            if action == "approve":
+                await _send_approved_preview(order_id, cfg, pool)
+            elif action == "edit":
+                await send_to_alessandro(cfg, f"Inviami il testo corretto per la preview dell'ordine #{order_id} e lo sostituirò.")
+
+    except Exception:
+        logger.exception("Error handling foolish callback_query: {}", data)
+
+
 class TelegramChannel(BaseChannel):
     """
     Telegram channel using long polling.
@@ -416,6 +504,12 @@ class TelegramChannel(BaseChannel):
             _wrap_msg,
         ))
 
+        if bl == "foolish":
+            async def _wrap_foolish_callback(update, context):
+                _current_bot_ctx.set({"app": app, "business_line": bl})
+                await _handle_foolish_callback(update, context)
+            app.add_handler(CallbackQueryHandler(_wrap_foolish_callback))
+
     async def _run_bot(self, app: Application, business_line: str) -> None:
         """Initialise, start polling, and run *app* until self._running is False."""
         await app.initialize()
@@ -435,7 +529,7 @@ class TelegramChannel(BaseChannel):
             logger.warning("Failed to register bot commands: {}", e)
 
         await app.updater.start_polling(
-            allowed_updates=["message"],
+            allowed_updates=["message", "callback_query"],
             drop_pending_updates=False,
             error_callback=self._on_polling_error,
         )

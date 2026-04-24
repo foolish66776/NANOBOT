@@ -403,6 +403,21 @@ def _onboard_plugins(config_path: Path) -> None:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
+def _load_env_local() -> None:
+    """Load ~/.nanobot/.env.local into os.environ if not already set."""
+    env_path = Path.home() / ".nanobot" / ".env.local"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        if key and key not in os.environ:
+            os.environ[key] = val.strip()
+
+
 def _make_provider(config: Config):
     """Create the appropriate LLM provider from config.
 
@@ -804,6 +819,22 @@ def gateway(
                 logger.exception("Weekly audit cron job failed")
             return None
 
+        # Foolish followup — check orders due for post-delivery check-in
+        if job.name == "foolish-followup":
+            try:
+                import os as _os
+                from nanobot.business.foolish.config import get_config as _get_foolish_cfg
+                from nanobot.business.foolish.pipeline.followup import run_followup_cron
+
+                _get_foolish_cfg.cache_clear() if hasattr(_get_foolish_cfg, 'cache_clear') else None
+                cfg_f = _get_foolish_cfg()
+                processed = await run_followup_cron(cfg_f)
+                if processed:
+                    logger.info("Foolish followup: {} orders processed", processed)
+            except Exception:
+                logger.exception("Foolish followup cron failed")
+            return None
+
         from nanobot.agent.tools.cron import CronTool
         from nanobot.agent.tools.message import MessageTool
         from nanobot.utils.evaluator import evaluate_response
@@ -959,6 +990,15 @@ def gateway(
         payload=CronPayload(kind="system_event"),
     ))
     console.print("[green]✓[/green] Daily brief: ogni giorno alle 08:00")
+
+    # Register foolish followup cron (ogni 15 minuti — §8.5 CLAUDE.md foolish)
+    cron.register_system_job(CronJob(
+        id="foolish-followup",
+        name="foolish-followup",
+        schedule=CronSchedule(kind="cron", expr="*/15 * * * *", tz=config.agents.defaults.timezone or "Europe/Rome"),
+        payload=CronPayload(kind="system_event"),
+    ))
+    console.print("[green]✓[/green] Foolish followup: ogni 15 minuti")
 
     async def run():
         try:
@@ -2163,6 +2203,70 @@ def _login_github_copilot() -> None:
     except Exception as e:
         console.print(f"[red]Authentication error: {e}[/red]")
         raise typer.Exit(1)
+
+
+# ============================================================================
+# Foolish commands
+# ============================================================================
+
+foolish_app = typer.Typer(help="The Foolish Butcher pipeline commands.", no_args_is_help=True)
+app.add_typer(foolish_app, name="foolish")
+
+
+@foolish_app.command("serve")
+def foolish_serve(
+    port: int = typer.Option(None, "--port", "-p", help="Webhook server port (default: FOOLISH_WEBHOOK_PORT or 8910)"),
+    host: str = typer.Option("0.0.0.0", "--host", help="Bind host"),
+):
+    """Avvia il webhook server per The Foolish Butcher pipeline.
+
+    Riceve webhook da WooCommerce e Telegram, gestisce il pipeline ordini.
+    """
+    import asyncio as _asyncio
+    from aiohttp import web as _web
+    from nanobot.business.foolish.config import get_config
+    from nanobot.business.foolish.webhook_server import build_app
+    _load_env_local()
+
+    cfg = get_config()
+    actual_port = port or cfg.webhook_port
+
+    console.print(f"[green]✓[/green] Foolish webhook server starting on {host}:{actual_port}")
+    console.print(f"  Endpoints:")
+    console.print(f"    GET  /health/foolish")
+    console.print(f"    POST /hooks/woocommerce")
+    console.print(f"    POST /hooks/telegram/foolish")
+
+    app_web = build_app(cfg)
+    _web.run_app(app_web, host=host, port=actual_port)
+
+
+@foolish_app.command("migrate")
+def foolish_migrate():
+    """Applica lo schema SQL foolish al database configurato."""
+    import asyncio as _asyncio
+    import importlib.util as _ilu
+    import os as _os
+    from pathlib import Path as _Path
+
+    script = _Path(__file__).parent.parent.parent / "scripts" / "foolish" / "migrate.py"
+    if not script.exists():
+        console.print(f"[red]Script non trovato: {script}[/red]")
+        raise typer.Exit(1)
+
+    db_url = (
+        _os.environ.get("FOOLISH_DATABASE_URL")
+        or _os.environ.get("NANOBOT_MEMORY_DATABASE_URL")
+    )
+    if not db_url:
+        console.print("[red]Imposta FOOLISH_DATABASE_URL o NANOBOT_MEMORY_DATABASE_URL[/red]")
+        raise typer.Exit(1)
+
+    spec = _ilu.spec_from_file_location("migrate", script)
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    _asyncio.run(mod.migrate(db_url))
+    console.print("[green]✓ Migrazione completata[/green]")
 
 
 if __name__ == "__main__":

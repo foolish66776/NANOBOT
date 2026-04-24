@@ -28,6 +28,12 @@ from nanobot.agent.tools.notebook import NotebookEditTool
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.search import GlobTool, GrepTool
 from nanobot.agent.tools.orchestrator import OrchestratorNotifyTool
+from nanobot.agent.tools.foolish import (
+    FoolishRegisterSheetTool,
+    FoolishQuerySheetsTool,
+    FoolishProposeMatchingTool,
+    FoolishRegisterShipmentTool,
+)
 from nanobot.agent.tools.shell import ExecTool
 from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.web import WebFetchTool, WebSearchTool
@@ -294,6 +300,10 @@ class AgentLoop:
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SpawnTool(manager=self.subagents))
         self.tools.register(OrchestratorNotifyTool())
+        self.tools.register(FoolishRegisterSheetTool())
+        self.tools.register(FoolishQuerySheetsTool())
+        self.tools.register(FoolishProposeMatchingTool())
+        self.tools.register(FoolishRegisterShipmentTool())
         if self.cron_service:
             self.tools.register(
                 CronTool(self.cron_service, default_timezone=self.context.timezone or "UTC")
