@@ -19,15 +19,12 @@ def gateway_main() -> None:
     cfg_path.write_text(config_json)
     print(f"✓ config.json written ({len(config_json)} chars)", flush=True)
 
-    # Workspace: Railway volume or fallback
-    workspace = pathlib.Path(os.environ.get("NANOBOT_WORKSPACE_DIR", "/data/workspace"))
-    workspace.mkdir(parents=True, exist_ok=True)
+    # Workspace: Railway volume if writable, altrimenti /tmp
+    workspace = _resolve_workspace()
     print(f"✓ Workspace: {workspace}", flush=True)
 
-    # Clone workspace from GitHub if empty
     _maybe_clone_workspace(workspace)
 
-    # Start gateway via CLI (reuse existing Typer command)
     print("✓ Avvio nanobot gateway...", flush=True)
     from nanobot.cli.commands import app
     sys.argv = [
@@ -38,13 +35,29 @@ def gateway_main() -> None:
     app()
 
 
+def _resolve_workspace() -> pathlib.Path:
+    preferred = pathlib.Path(os.environ.get("NANOBOT_WORKSPACE_DIR", "/data/workspace"))
+    preferred.mkdir(parents=True, exist_ok=True)
+    # Verifica che sia scrivibile
+    test_file = preferred / ".write_test"
+    try:
+        test_file.write_text("ok")
+        test_file.unlink()
+        return preferred
+    except OSError:
+        print(f"⚠ {preferred} non scrivibile, uso /tmp/workspace", flush=True)
+        fallback = pathlib.Path("/tmp/workspace")
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+
 def _maybe_clone_workspace(workspace: pathlib.Path) -> None:
     token = os.environ.get("GITHUB_TOKEN", "")
     repo = os.environ.get("NANOBOT_WORKSPACE_REPO", "")
     if not token or not repo:
         return
     if any(workspace.iterdir() if workspace.exists() else []):
-        return  # already populated
+        return
     import subprocess
     url = f"https://{token}@github.com/{repo}"
     print(f"Volume vuoto — clono {repo}...", flush=True)
