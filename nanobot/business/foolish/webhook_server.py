@@ -8,6 +8,7 @@ Routes:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -45,12 +46,37 @@ async def _startup(app: web.Application, cfg: FoolishConfig) -> None:
     from .db import get_pool
     app["pool"] = await get_pool(cfg.database_url)
     app["cfg"] = cfg
+    if cfg.packlink_api_key:
+        app["_packlink_poll_task"] = asyncio.ensure_future(_packlink_poll_loop(cfg))
+        logger.info("Packlink polling background task started (interval=6h)")
+    else:
+        logger.info("FOOLISH_PACKLINK_API_KEY not set — Packlink polling disabled")
     logger.info("Foolish webhook server started")
 
 
 async def _cleanup(app: web.Application) -> None:
+    task = app.get("_packlink_poll_task")
+    if task:
+        task.cancel()
     from .db import close_pool
     await close_pool()
+
+
+async def _packlink_poll_loop(cfg: FoolishConfig) -> None:
+    """Background task: poll Packlink API every 6 hours for shipment status updates."""
+    INITIAL_DELAY = 60       # wait 1 min after startup before first poll
+    INTERVAL = 6 * 3600      # 6 hours
+    await asyncio.sleep(INITIAL_DELAY)
+    while True:
+        try:
+            from .pipeline.packlink_poll import run_packlink_poll
+            summary = await run_packlink_poll(cfg)
+            logger.info("Packlink poll done: {}", summary)
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            logger.error("Packlink poll loop error: {}", exc)
+        await asyncio.sleep(INTERVAL)
 
 
 class WebhookHandler:
