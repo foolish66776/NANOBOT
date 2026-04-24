@@ -28,7 +28,7 @@ class FoolishConfig:
         self.woo_webhook_secret = os.environ.get("FOOLISH_WOO_WEBHOOK_SECRET", "")
         self.trust_threshold_date = os.environ.get("FOOLISH_TRUST_THRESHOLD_DATE", "2099-01-01")
         self.followup_delay_days = int(os.environ.get("FOOLISH_FOLLOWUP_DELAY_DAYS", "3"))
-        self.webhook_port = int(os.environ.get("FOOLISH_WEBHOOK_PORT", "8910"))
+        self.webhook_port = int(os.environ.get("FOOLISH_WEBHOOK_PORT") or os.environ.get("PORT") or "8910")
 
 
 def _require(key: str) -> str:
