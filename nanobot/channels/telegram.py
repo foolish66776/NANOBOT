@@ -881,12 +881,20 @@ class TelegramChannel(BaseChannel):
         return f"{sid}|{user.username}" if user.username else sid
 
     @staticmethod
-    def _derive_topic_session_key(message) -> str | None:
-        """Derive topic-scoped session key for Telegram chats with threads."""
+    def _derive_topic_session_key(message, business_line: str | None = None) -> str | None:
+        """Derive topic-scoped session key for Telegram chats.
+
+        Includes business_line so each bot has an isolated session history
+        even when the same user (same chat_id) talks to multiple bots.
+        """
         message_thread_id = getattr(message, "message_thread_id", None)
+        bl_suffix = f":{business_line}" if business_line else ""
         if message_thread_id is None:
+            # In multi-bot mode, scope session to the specific business line.
+            if business_line:
+                return f"telegram:{message.chat_id}{bl_suffix}"
             return None
-        return f"telegram:{message.chat_id}:topic:{message_thread_id}"
+        return f"telegram:{message.chat_id}:topic:{message_thread_id}{bl_suffix}"
 
     @staticmethod
     def _build_message_metadata(message, user) -> dict:
@@ -1149,9 +1157,10 @@ class TelegramChannel(BaseChannel):
         metadata = self._build_message_metadata(message, user)
         # Inject business_line from per-bot context (multi-bot mode).
         ctx = _current_bot_ctx.get()
-        if ctx and ctx.get("business_line"):
-            metadata["business_line"] = ctx["business_line"]
-        session_key = self._derive_topic_session_key(message)
+        bot_business_line = ctx.get("business_line") if ctx else None
+        if bot_business_line:
+            metadata["business_line"] = bot_business_line
+        session_key = self._derive_topic_session_key(message, business_line=bot_business_line)
 
         # Telegram media groups: buffer briefly, forward as one aggregated turn.
         if media_group_id := getattr(message, "media_group_id", None):
