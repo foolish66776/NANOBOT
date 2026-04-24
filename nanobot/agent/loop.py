@@ -33,6 +33,8 @@ from nanobot.agent.tools.foolish import (
     FoolishQuerySheetsTool,
     FoolishProposeMatchingTool,
     FoolishRegisterShipmentTool,
+    FoolishPacklinkSetupTool,
+    FoolishPacklinkGetLabelTool,
 )
 from nanobot.agent.tools.shell import ExecTool
 from nanobot.agent.tools.spawn import SpawnTool
@@ -304,6 +306,8 @@ class AgentLoop:
         self.tools.register(FoolishQuerySheetsTool())
         self.tools.register(FoolishProposeMatchingTool())
         self.tools.register(FoolishRegisterShipmentTool())
+        self.tools.register(FoolishPacklinkSetupTool())
+        self.tools.register(FoolishPacklinkGetLabelTool())
         if self.cron_service:
             self.tools.register(
                 CronTool(self.cron_service, default_timezone=self.context.timezone or "UTC")

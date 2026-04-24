@@ -289,6 +289,137 @@ class FoolishQuerySheetsTool(Tool):
             return f"Errore nella query: {exc}"
 
 
+@tool_parameters(
+    {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    }
+)
+class FoolishPacklinkSetupTool(Tool):
+    """Registra il webhook Packlink Pro sull'account API e mostra lo stato attuale."""
+
+    @property
+    def name(self) -> str:
+        return "foolish_packlink_setup_webhook"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Registra il webhook Packlink Pro (tracking events) sul nostro endpoint pubblico. "
+            "Usa dopo aver impostato FOOLISH_PACKLINK_API_KEY e FOOLISH_WEBHOOK_BASE_URL. "
+            "Mostra anche i webhook già registrati."
+        )
+
+    async def execute(self, **kwargs: Any) -> str:
+        try:
+            from nanobot.business.foolish.config import get_config
+            from nanobot.business.foolish.packlink import list_webhooks, register_webhook
+
+            cfg = get_config()
+            if not cfg.packlink_api_key:
+                return "Errore: FOOLISH_PACKLINK_API_KEY non configurata."
+            if not cfg.webhook_base_url:
+                return "Errore: FOOLISH_WEBHOOK_BASE_URL non configurata (es. https://xxx.railway.app)."
+
+            callback_url = f"{cfg.webhook_base_url}/hooks/packlink"
+
+            # Show existing hooks first
+            try:
+                existing = await list_webhooks(cfg.packlink_api_key, cfg.packlink_base_url)
+                existing_urls = [h.get("url", "") for h in existing] if existing else []
+            except Exception as exc:
+                existing_urls = []
+                logger.warning("Packlink list_webhooks failed: {}", exc)
+
+            # Register new hooks
+            results = await register_webhook(cfg.packlink_api_key, cfg.packlink_base_url, callback_url)
+
+            lines = [f"**Webhook URL target:** `{callback_url}`\n"]
+            if existing_urls:
+                lines.append("**Già registrati:**")
+                lines.extend(f"  • {u}" for u in existing_urls)
+                lines.append("")
+            lines.append("**Registrazione eventi:**")
+            for r in results:
+                icon = "✅" if r["status"] == "ok" else "❌"
+                detail = f" — {r.get('code', r.get('error', ''))}" if r["status"] != "ok" else ""
+                lines.append(f"  {icon} {r['event']}{detail}")
+
+            return "\n".join(lines)
+
+        except Exception as exc:
+            logger.error("foolish_packlink_setup_webhook error: {}", exc)
+            return f"Errore: {exc}"
+
+
+@tool_parameters(
+    {
+        "type": "object",
+        "properties": {
+            "reference": {
+                "type": "string",
+                "description": "Riferimento Packlink della spedizione (es. ES123456789012345678).",
+            },
+        },
+        "required": ["reference"],
+    }
+)
+class FoolishPacklinkGetLabelTool(Tool):
+    """Recupera il link PDF dell'etichetta di spedizione da Packlink Pro."""
+
+    @property
+    def name(self) -> str:
+        return "foolish_packlink_get_label"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Recupera l'URL del PDF dell'etichetta Packlink per un riferimento di spedizione. "
+            "Utile quando Alessandro ha creato la spedizione su Packlink e vuole il link diretto all'etichetta."
+        )
+
+    async def execute(self, **kwargs: Any) -> str:
+        try:
+            from nanobot.business.foolish.config import get_config
+            from nanobot.business.foolish.packlink import get_label_url, get_shipment
+
+            cfg = get_config()
+            if not cfg.packlink_api_key:
+                return "Errore: FOOLISH_PACKLINK_API_KEY non configurata."
+
+            reference = kwargs["reference"].strip()
+            shipment = await get_shipment(cfg.packlink_api_key, cfg.packlink_base_url, reference)
+
+            carrier_tracking = (
+                shipment.get("carrier_tracking_id")
+                or shipment.get("carrier_reference")
+                or shipment.get("trackingCode")
+                or "N/D"
+            )
+            state = shipment.get("state") or shipment.get("status") or "N/D"
+            if isinstance(state, dict):
+                state = state.get("description") or state.get("slug") or str(state)
+
+            label_url = await get_label_url(cfg.packlink_api_key, cfg.packlink_base_url, reference)
+
+            lines = [
+                f"**Packlink ref:** `{reference}`",
+                f"**Carrier tracking:** `{carrier_tracking}`",
+                f"**Stato:** {state}",
+            ]
+            if label_url:
+                lines.append(f"**Etichetta PDF:** {label_url}")
+            else:
+                lines.append("**Etichetta:** non ancora disponibile.")
+
+            return "\n".join(lines)
+
+        except Exception as exc:
+            logger.error("foolish_packlink_get_label error: {}", exc)
+            return f"Errore: {exc}"
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

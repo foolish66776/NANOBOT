@@ -100,31 +100,62 @@ class WebhookHandler:
         cfg = request.app["cfg"]
         pool = request.app["pool"]
 
-        # Packlink sends an array of shipment events
-        events = payload if isinstance(payload, list) else [payload]
-        for event in events:
-            status = (event.get("status") or event.get("StatusMessage") or "").upper()
-            tracking = event.get("trackingCode") or event.get("reference") or ""
-            if not tracking:
+        from .packlink import parse_webhook_event
+
+        raw_events = payload if isinstance(payload, list) else [payload]
+        for raw in raw_events:
+            event = parse_webhook_event(raw)
+            reference = event["reference"]
+            carrier_tracking = event["carrier_tracking"]
+            status = event["status"]
+
+            if not reference and not carrier_tracking:
+                logger.debug("Packlink webhook: no reference or tracking, skipping")
                 continue
 
-            logger.info("Packlink event: status={} tracking={}", status, tracking)
+            logger.info(
+                "Packlink event: status={} reference={} carrier_tracking={}",
+                status, reference, carrier_tracking,
+            )
 
-            if "DELIVERED" in status or status in ("DEL", "OK_DEL"):
-                # Find order by tracking number
-                row = await pool.fetchrow(
-                    "SELECT id FROM foolish.orders WHERE tracking_number = $1 AND pipeline_state = 'shipped'",
-                    tracking,
+            # Match order by Packlink reference or carrier tracking number
+            row = await pool.fetchrow(
+                """SELECT id FROM foolish.orders
+                   WHERE pipeline_state = 'shipped'
+                     AND (tracking_number = $1 OR tracking_number = $2)
+                   LIMIT 1""",
+                reference, carrier_tracking,
+            )
+
+            if not row:
+                logger.warning("Packlink event: no shipped order found for ref={} carrier={}", reference, carrier_tracking)
+                continue
+
+            order_id = row["id"]
+
+            _DELIVERED_SLUGS = {"DELIVERED", "DEL", "OK_DEL"}
+            _TRANSIT_SLUGS = {"IN_TRANSIT", "IN-TRANSIT", "INTRANSIT", "TRANSIT"}
+            _OUT_SLUGS = {"OUT_FOR_DELIVERY", "OUT-FOR-DELIVERY", "OUTFORDELIVERY"}
+            _INCIDENT_SLUGS = {"INCIDENCE", "INCIDENT", "EXCEPTION", "FAILED"}
+
+            if any(s in status for s in _DELIVERED_SLUGS):
+                from .pipeline.followup import schedule_followup
+                await schedule_followup(order_id, cfg)
+                await send_to_alessandro(
+                    cfg,
+                    f"📦 Ordine #{order_id} consegnato (Packlink).\n"
+                    f"Follow-up programmato tra {cfg.followup_delay_days} giorni.",
                 )
-                if row:
-                    from .pipeline.followup import schedule_followup
-                    await schedule_followup(row["id"], cfg)
-                    from .telegram import send_to_alessandro
-                    await send_to_alessandro(
-                        cfg,
-                        f"📦 Ordine #{row['id']} consegnato (Packlink). "
-                        f"Follow-up programmato tra {cfg.followup_delay_days} giorni.",
-                    )
+            elif any(s in status for s in _OUT_SLUGS):
+                await send_to_alessandro(cfg, f"🚚 Ordine #{order_id} in consegna oggi (Packlink).")
+            elif any(s in status for s in _TRANSIT_SLUGS):
+                await send_to_alessandro(cfg, f"📫 Ordine #{order_id} in transito (Packlink).")
+            elif any(s in status for s in _INCIDENT_SLUGS):
+                await send_to_alessandro(
+                    cfg,
+                    f"⚠️ Problema spedizione ordine #{order_id} (Packlink: {status}).\n"
+                    "Controlla il portale Packlink.",
+                )
 
         return web.Response(status=200, text="ok")
 

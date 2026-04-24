@@ -18,6 +18,9 @@ class FoolishConfig:
     followup_delay_days: int
     webhook_port: int
     telegram_bot_username: str
+    webhook_base_url: str
+    packlink_api_key: str
+    packlink_base_url: str
     r2_endpoint: str
     r2_bucket: str
     r2_access_key_id: str
@@ -36,6 +39,9 @@ class FoolishConfig:
         self.followup_delay_days = int(os.environ.get("FOOLISH_FOLLOWUP_DELAY_DAYS", "3"))
         self.webhook_port = int(os.environ.get("FOOLISH_WEBHOOK_PORT") or os.environ.get("PORT") or "8910")
         self.telegram_bot_username = os.environ.get("FOOLISH_TELEGRAM_BOT_USERNAME", "")
+        self.webhook_base_url = os.environ.get("FOOLISH_WEBHOOK_BASE_URL", "").rstrip("/")
+        self.packlink_api_key = os.environ.get("FOOLISH_PACKLINK_API_KEY", "")
+        self.packlink_base_url = os.environ.get("FOOLISH_PACKLINK_BASE_URL", "https://api.packlink.com/v1")
         self.r2_endpoint = os.environ.get("FOOLISH_R2_ENDPOINT", "")
         self.r2_bucket = os.environ.get("FOOLISH_R2_BUCKET", "")
         self.r2_access_key_id = os.environ.get("FOOLISH_R2_ACCESS_KEY_ID", "")
