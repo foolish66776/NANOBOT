@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from loguru import logger
 
-from ..config import FoolishConfig
+if TYPE_CHECKING:
+    from ..config import FoolishConfig
 from ..db import OrderRepo, MessageRepo
 from ..telegram import send_to_customer, send_to_alessandro
+
+
 
 
 TRACKING_TEMPLATE = "Partito. Tracking: {tracking_number} ({carrier}).\nLink: {tracking_url}"
@@ -20,6 +25,21 @@ _CARRIER_LINKS = {
     "ups": "https://www.ups.com/track?tracknum={tn}",
     "fedex": "https://www.fedex.com/fedextrack/?tracknumbers={tn}",
     "packlink": "https://app.packlink.com/tracking/{tn}",
+}
+
+# Packlink service name substrings → normalized carrier key
+_PACKLINK_CARRIER_MAP = {
+    "gls": "gls",
+    "brt": "brt",
+    "bartolini": "brt",
+    "sda": "sda",
+    "dhl": "dhl",
+    "ups": "ups",
+    "fedex": "fedex",
+    "poste": "poste",
+    "nexive": "nexive",
+    "tnt": "tnt",
+    "dpd": "dpd",
 }
 
 
@@ -44,13 +64,24 @@ async def handle_shipment(
     pool_url = cfg.database_url
     pool = await asyncpg.create_pool(pool_url, min_size=1, max_size=2)
     try:
-        # Save tracking info
+        carrier_key = carrier.lower().strip()
+
+        # When carrier is packlink, resolve real carrier + tracking via API
+        display_tracking = tracking_number
+        display_carrier = carrier_key
+        if carrier_key == "packlink" and cfg.packlink_api_key:
+            display_tracking, display_carrier = await _resolve_packlink_tracking(
+                cfg, tracking_number, display_carrier
+            )
+
+        # Save tracking info (tracking_number = Packlink reference for polling;
+        # display_tracking/carrier used only in the customer message)
         await pool.execute(
             """UPDATE foolish.orders
                SET tracking_number = $1, tracking_carrier = $2,
                    shipped_at = NOW(), pipeline_state = 'shipped', updated_at = NOW()
                WHERE id = $3""",
-            tracking_number, carrier.lower(), order_id,
+            tracking_number, carrier_key, order_id,
         )
         # Mark reserved sheets as shipped
         await pool.execute(
@@ -62,16 +93,18 @@ async def handle_shipment(
                WHERE reserved_for_order_id = $1""",
             order_id,
         )
-        logger.info("Order {} shipped: tracking={} carrier={}", order_id, tracking_number, carrier)
+        logger.info(
+            "Order {} shipped: pl_ref={} carrier={} display_tracking={} display_carrier={}",
+            order_id, tracking_number, carrier_key, display_tracking, display_carrier,
+        )
 
-        # Build tracking URL
-        carrier_key = carrier.lower().strip()
-        url_template = _CARRIER_LINKS.get(carrier_key, "https://parcelsapp.com/en/tracking/{tn}")
-        tracking_url = url_template.format(tn=tracking_number)
+        # Build tracking URL using resolved carrier when possible
+        url_template = _CARRIER_LINKS.get(display_carrier, "https://parcelsapp.com/en/tracking/{tn}")
+        tracking_url = url_template.format(tn=display_tracking)
 
         body = TRACKING_TEMPLATE.format(
-            tracking_number=tracking_number,
-            carrier=carrier.upper(),
+            tracking_number=display_tracking,
+            carrier=display_carrier.upper(),
             tracking_url=tracking_url,
         )
 
@@ -97,3 +130,51 @@ async def handle_shipment(
             return f"Spedizione registrata. Il cliente non ha Telegram — bozza inviata ad Alessandro."
     finally:
         await pool.close()
+
+
+async def _resolve_packlink_tracking(
+    cfg: "FoolishConfig",
+    packlink_reference: str,
+    fallback_carrier: str,
+) -> tuple[str, str]:
+    """Call Packlink API to get the real carrier tracking number and carrier name.
+
+    Returns (carrier_tracking, carrier_key). Falls back to (packlink_reference, 'packlink')
+    if the API call fails or data is not yet available.
+    """
+    try:
+        from ..packlink import get_shipment
+        shipment = await get_shipment(cfg.packlink_api_key, cfg.packlink_base_url, packlink_reference)
+
+        carrier_tracking = (
+            shipment.get("carrier_tracking_id")
+            or shipment.get("carrier_reference")
+            or shipment.get("carrierReference")
+            or ""
+        )
+
+        # Try to resolve carrier name from service info
+        service_name = (
+            shipment.get("service_name")
+            or shipment.get("service")
+            or shipment.get("carrier")
+            or ""
+        ).lower()
+        carrier_key = fallback_carrier
+        for keyword, mapped in _PACKLINK_CARRIER_MAP.items():
+            if keyword in service_name:
+                carrier_key = mapped
+                break
+
+        if carrier_tracking:
+            logger.info(
+                "Packlink resolved: ref={} → tracking={} carrier={}",
+                packlink_reference, carrier_tracking, carrier_key,
+            )
+            return carrier_tracking, carrier_key
+
+    except Exception as exc:
+        logger.warning("Packlink resolve failed for {}: {}", packlink_reference, exc)
+
+    # Fallback: show Packlink reference with Packlink tracking link
+    return packlink_reference, "packlink"
