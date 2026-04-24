@@ -16,6 +16,16 @@ def gateway_main() -> None:
     cfg_dir = pathlib.Path("/tmp/nanobot")
     cfg_dir.mkdir(parents=True, exist_ok=True)
     cfg_path = cfg_dir / "config.json"
+    # Patch workspace path to Railway location
+    import json as _json
+    try:
+        cfg = _json.loads(config_json)
+        workspace_dir = os.environ.get("NANOBOT_WORKSPACE_DIR", "/tmp/workspace")
+        if "agents" in cfg and "defaults" in cfg["agents"]:
+            cfg["agents"]["defaults"]["workspace"] = workspace_dir
+        config_json = _json.dumps(cfg)
+    except Exception:
+        pass
     cfg_path.write_text(config_json)
     print(f"✓ config.json written ({len(config_json)} chars)", flush=True)
 
