@@ -36,11 +36,10 @@ def gateway_main() -> None:
 
 
 def _resolve_workspace() -> pathlib.Path:
-    preferred = pathlib.Path(os.environ.get("NANOBOT_WORKSPACE_DIR", "/data/workspace"))
-    preferred.mkdir(parents=True, exist_ok=True)
-    # Verifica che sia scrivibile
-    test_file = preferred / ".write_test"
+    preferred = pathlib.Path(os.environ.get("NANOBOT_WORKSPACE_DIR", "/tmp/workspace"))
     try:
+        preferred.mkdir(parents=True, exist_ok=True)
+        test_file = preferred / ".write_test"
         test_file.write_text("ok")
         test_file.unlink()
         return preferred
