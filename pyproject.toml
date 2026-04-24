@@ -53,6 +53,9 @@ dependencies = [
     "filelock>=3.25.2",
     "asyncpg>=0.29.0,<1.0.0",
     "aiohttp>=3.9.0,<4.0.0",
+    "mem0ai>=1.0.11",
+    "psycopg2-binary>=2.9.0",
+    "cohere>=5.0.0",
 ]
 
 [project.optional-dependencies]
