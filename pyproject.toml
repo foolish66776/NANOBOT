@@ -101,6 +101,7 @@ dev = [
 
 [project.scripts]
 nanobot = "nanobot.cli.commands:app"
+nanobot-railway-gateway = "nanobot.cli.railway:gateway_main"
 
 [build-system]
 requires = ["hatchling"]
