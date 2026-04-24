@@ -1,10 +1,7 @@
 [build]
 builder = "nixpacks"
-buildCommand = "pip install '.[foolish]'"
 
 [deploy]
 startCommand = "nanobot foolish serve"
-healthcheckPath = "/health/foolish"
-healthcheckTimeout = 30
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
