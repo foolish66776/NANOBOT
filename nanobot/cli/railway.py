@@ -61,7 +61,7 @@ def _maybe_clone_workspace(workspace: pathlib.Path) -> None:
     url = f"https://{token}@github.com/{repo}"
     print(f"Volume vuoto — clono {repo}...", flush=True)
     result = subprocess.run(
-        ["git", "clone", "--depth=1", url, str(workspace)],
+        ["git", "clone", "--depth=1", "--branch=master", url, str(workspace)],
         capture_output=True, text=True,
     )
     if result.returncode == 0:
