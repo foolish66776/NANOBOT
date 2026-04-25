@@ -693,3 +693,196 @@ class WikiMem0SyncTool(Tool):
         except Exception as exc:
             logger.error("wiki_mem0_sync error: {}", exc)
             return f"Errore Mem0 sync: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# WikiIngestSourceTool  (Fase 5 — source ingest)
+# ---------------------------------------------------------------------------
+
+@tool_parameters({
+    "type": "object",
+    "properties": {
+        "title": {
+            "type": "string",
+            "description": "Titolo della fonte (articolo, newsletter, video, PDF).",
+        },
+        "source_url": {
+            "type": "string",
+            "description": "URL della fonte, se disponibile.",
+        },
+        "source_type": {
+            "type": "string",
+            "enum": ["articolo", "newsletter", "PDF", "video", "altro"],
+            "description": "Tipo di fonte.",
+        },
+        "summary": {
+            "type": "string",
+            "description": "Sintesi oggettiva della fonte in 3-5 righe.",
+        },
+        "alessandros_take": {
+            "type": "string",
+            "description": "Punto di vista di Alessandro sulla fonte. Se non fornito, il tool chiederà.",
+        },
+        "tags": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Tag pertinenti.",
+        },
+    },
+    "required": ["title", "source_type", "summary"],
+})
+class WikiIngestSourceTool(Tool):
+    """Crea una pagina sources/ per una fonte esterna ingested."""
+
+    @property
+    def name(self) -> str:
+        return "wiki_ingest_source"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Crea una pagina in sources/ per una fonte esterna (articolo, newsletter, PDF, video). "
+            "Se alessandros_take non è fornito, risponde chiedendo il suo punto di vista prima di scrivere. "
+            "Aggiorna _log.md e sincronizza su Mem0."
+        )
+
+    async def execute(self, **kwargs: Any) -> str:
+        title: str = kwargs["title"]
+        source_url: str | None = kwargs.get("source_url")
+        source_type: str = kwargs["source_type"]
+        summary: str = kwargs["summary"]
+        alessandros_take: str | None = kwargs.get("alessandros_take")
+        tags: list = kwargs.get("tags") or []
+
+        if not alessandros_take:
+            return (
+                f"📎 Fonte ricevuta: **{title}**\n\n"
+                f"Sintesi: {summary}\n\n"
+                "Qual è il tuo take su questo? "
+                "Cosa è in linea con le tue beliefs, cosa le sfida, cosa aggiunge?"
+            )
+
+        import re
+        slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:50]
+        path = f"sources/{slug}.md"
+
+        body = f"# {title}\n"
+        if source_url:
+            body += f"**Fonte:** {source_url}\n"
+        body += f"**Tipo:** {source_type}\n\n"
+        body += f"## Sintesi oggettiva\n\n{summary}\n\n"
+        body += f"## Alessandro's take\n\n{alessandros_take}\n\n"
+        body += "## Connessioni wiki\n\n*(da completare)*\n"
+
+        try:
+            vault = _get_vault()
+            raw = _get_raw()
+            raw.store_raw(f"{title}\n{source_url or ''}\n{summary}\n{alessandros_take}", "text", source_url=source_url)
+            vault.create_page(path=path, page_type="source", title=title, body=body, tags=tags)
+            return (
+                f"✅ Fonte ingested: **{path}**\n"
+                f"Ora aggiorna le pagine beliefs/ o business/ pertinenti se necessario, "
+                f"poi chiama wiki_mem0_sync per sincronizzare su Mem0."
+            )
+        except Exception as exc:
+            logger.error("wiki_ingest_source error: {}", exc)
+            return f"Errore ingest source: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# WikiIngestBusinessIdeaTool  (Fase 5 — business_idea ingest)
+# ---------------------------------------------------------------------------
+
+@tool_parameters({
+    "type": "object",
+    "properties": {
+        "title": {
+            "type": "string",
+            "description": "Titolo dell'idea di business (4-6 parole).",
+        },
+        "description": {
+            "type": "string",
+            "description": "Descrizione dell'idea: problema, soluzione, leva.",
+        },
+        "pain_point": {
+            "type": "string",
+            "description": "Pain point concreto che risolve.",
+        },
+        "who_pays": {
+            "type": "string",
+            "description": "Chi paga e perché.",
+        },
+        "why_now": {
+            "type": "string",
+            "description": "Perché questo momento è quello giusto.",
+        },
+        "tags": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Tag pertinenti.",
+        },
+    },
+    "required": ["title", "description"],
+})
+class WikiIngestBusinessIdeaTool(Tool):
+    """Crea una pagina business/ per una nuova idea di business con status 'exploring'."""
+
+    @property
+    def name(self) -> str:
+        return "wiki_ingest_business_idea"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Crea una pagina in business/ per una nuova idea di business con status 'exploring'. "
+            "Collega alle beliefs e patterns pertinenti. "
+            "Se mancano pain_point, who_pays o why_now, li chiede prima di creare la pagina."
+        )
+
+    async def execute(self, **kwargs: Any) -> str:
+        title: str = kwargs["title"]
+        description: str = kwargs["description"]
+        pain_point: str | None = kwargs.get("pain_point")
+        who_pays: str | None = kwargs.get("who_pays")
+        why_now: str | None = kwargs.get("why_now")
+        tags: list = kwargs.get("tags") or []
+
+        missing = []
+        if not pain_point:
+            missing.append("pain point concreto")
+        if not who_pays:
+            missing.append("chi paga")
+        if not why_now:
+            missing.append("perché ora")
+
+        if missing:
+            return (
+                f"💡 Idea ricevuta: **{title}**\n\n"
+                f"{description}\n\n"
+                f"Prima di creare la pagina, dimmi: {', '.join(missing)}?"
+            )
+
+        import re
+        slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:50]
+        path = f"business/{slug}.md"
+
+        body = f"# {title}\n\n"
+        body += f"## Descrizione\n\n{description}\n\n"
+        body += f"## Pain point\n\n{pain_point}\n\n"
+        body += f"## Chi paga\n\n{who_pays}\n\n"
+        body += f"## Perché ora\n\n{why_now}\n\n"
+        body += "## Connessioni\n\n*(da completare — collega a beliefs/ e patterns/ pertinenti)*\n"
+
+        try:
+            vault = _get_vault()
+            raw = _get_raw()
+            raw.store_raw(f"{title}\n{description}\n{pain_point}\n{who_pays}\n{why_now}", "text")
+            vault.create_page(path=path, page_type="business", title=title, body=body,
+                              tags=tags, status="exploring")
+            return (
+                f"✅ Idea di business creata: **{path}** (status: exploring)\n"
+                f"Collega a beliefs/ e patterns/ pertinenti con wiki_read_index + wiki_write_page."
+            )
+        except Exception as exc:
+            logger.error("wiki_ingest_business_idea error: {}", exc)
+            return f"Errore ingest business idea: {exc}"
