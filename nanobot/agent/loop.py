@@ -51,6 +51,7 @@ from nanobot.agent.tools.wiki import (
     WikiMem0SyncTool,
     WikiIngestSourceTool,
     WikiIngestBusinessIdeaTool,
+    WikiGitPullTool,
 )
 from nanobot.agent.tools.shell import ExecTool
 from nanobot.agent.tools.spawn import SpawnTool
@@ -338,6 +339,7 @@ class AgentLoop:
         self.tools.register(WikiMem0SyncTool())
         self.tools.register(WikiIngestSourceTool())
         self.tools.register(WikiIngestBusinessIdeaTool())
+        self.tools.register(WikiGitPullTool())
         if self.cron_service:
             self.tools.register(
                 CronTool(self.cron_service, default_timezone=self.context.timezone or "UTC")

@@ -12,7 +12,18 @@ from nanobot.agent.tools.base import Tool, tool_parameters
 def _get_vault() -> "VaultManager":
     from nanobot.business.wiki.config import get_config
     from nanobot.business.wiki.vault import VaultManager
-    return VaultManager(get_config().vault_path)
+    cfg = get_config()
+    git_mgr = None
+    if cfg.git_auto_push and cfg.git_repo and cfg.git_ssh_key:
+        from nanobot.business.wiki.git_manager import GitManager
+        git_mgr = GitManager(
+            repo_path=cfg.vault_path,
+            remote_url=cfg.git_repo,
+            ssh_key_content=cfg.git_ssh_key,
+            author_name=cfg.git_author_name,
+            author_email=cfg.git_author_email,
+        )
+    return VaultManager(cfg.vault_path, git_manager=git_mgr)
 
 
 def _get_raw() -> "RawStore":
@@ -886,3 +897,33 @@ class WikiIngestBusinessIdeaTool(Tool):
         except Exception as exc:
             logger.error("wiki_ingest_business_idea error: {}", exc)
             return f"Errore ingest business idea: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# WikiGitPullTool
+# ---------------------------------------------------------------------------
+
+@tool_parameters({"type": "object", "properties": {}, "required": []})
+class WikiGitPullTool(Tool):
+    """Forza git pull dal remote GitHub (usare dopo edit manuale da Obsidian)."""
+
+    @property
+    def name(self) -> str:
+        return "wiki_git_pull"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Esegue git pull origin main sul vault. "
+            "Usare quando Alessandro ha editato da Obsidian e vuole sincronizzare. "
+            "Richiede WIKI_GIT_AUTO_PUSH=true e WIKI_GIT_REPO configurati."
+        )
+
+    async def execute(self, **kwargs: Any) -> str:
+        try:
+            vault = _get_vault()
+            await vault.pull()
+            return "✅ git pull completato — vault aggiornato."
+        except Exception as exc:
+            logger.error("wiki_git_pull error: {}", exc)
+            return f"Errore git pull: {exc}"

@@ -5,12 +5,15 @@ from __future__ import annotations
 import re
 from datetime import date, datetime
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import yaml
 from loguru import logger
 
 from .models import IndexChange, LogEntry, WikiFrontmatter, WikiPage
+
+if TYPE_CHECKING:
+    from .git_manager import GitManager
 
 
 _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n?", re.DOTALL)
@@ -32,11 +35,12 @@ class InvalidFrontmatter(VaultError):
 
 
 class VaultManager:
-    def __init__(self, vault_path: Path) -> None:
+    def __init__(self, vault_path: Path, git_manager: "GitManager | None" = None) -> None:
         self.root = vault_path
         self.root.mkdir(parents=True, exist_ok=True)
         for section in _INDEX_SECTIONS:
             (self.root / section).mkdir(exist_ok=True)
+        self._git = git_manager
 
     # ------------------------------------------------------------------
     # Read
@@ -76,13 +80,32 @@ class VaultManager:
         full.parent.mkdir(parents=True, exist_ok=True)
         full.write_text(self._serialize(page), encoding="utf-8")
         logger.info("Wiki page written: {} — {}", path, reason)
-        self.append_log(LogEntry(
+        log_entry = LogEntry(
             timestamp=datetime.now(),
             type="update",
             title=path,
             detail=reason,
-        ))
+        )
+        self.append_log(log_entry)
+        if self._git:
+            import asyncio
+            section = path.split("/")[0] if "/" in path else "update"
+            commit_msg = f"wiki: {section} | {path}"
+            coro = self._git.commit_and_push(commit_msg, [path, "_log.md"])
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.ensure_future(coro)
+                else:
+                    loop.run_until_complete(coro)
+            except Exception as e:
+                logger.warning("GitManager push skipped: {}", e)
         return page
+
+    async def pull(self) -> None:
+        """git pull dal remote — delegato a GitManager se configurato."""
+        if self._git:
+            await self._git.pull()
 
     def create_page(self, path: str, page_type: str, title: str, body: str,
                     tags: list[str] | None = None,
