@@ -411,3 +411,285 @@ class WikiAppendLogTool(Tool):
         except Exception as exc:
             logger.error("wiki_append_log error: {}", exc)
             return f"Errore append log: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# WikiQueryTool  (Fase 2 — Query graph)
+# ---------------------------------------------------------------------------
+
+@tool_parameters({
+    "type": "object",
+    "properties": {
+        "question": {
+            "type": "string",
+            "description": "Domanda da rispondere attingendo al vault wiki.",
+        },
+        "sections": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Sezioni da consultare (beliefs, patterns, business, content, sources). Ometti per tutte.",
+        },
+    },
+    "required": ["question"],
+})
+class WikiQueryTool(Tool):
+    """Risponde a una domanda attingendo al vault wiki, in prima persona come Alessandro."""
+
+    @property
+    def name(self) -> str:
+        return "wiki_query"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Risponde a una domanda attingendo al vault wiki di Alessandro. "
+            "Legge _index.md, identifica le pagine pertinenti, le legge, e compone "
+            "una risposta in prima persona come Alessandro. "
+            "Cita sempre le pagine usate. Se il vault non ha material sufficiente, lo dice esplicitamente."
+        )
+
+    async def execute(self, **kwargs: Any) -> str:
+        question: str = kwargs["question"]
+        sections: list[str] | None = kwargs.get("sections")
+        try:
+            vault = _get_vault()
+            index = vault.read_index()
+            pages_to_read: list[str] = []
+            for section in (sections or ["beliefs", "patterns", "business"]):
+                pages_to_read.extend(vault.list_pages(section))
+
+            if not pages_to_read:
+                return (
+                    "Il vault non contiene ancora pagine sufficienti per rispondere. "
+                    "Aggiungi contenuto con l'ingest prima di fare query."
+                )
+
+            # Read all relevant pages
+            page_contents: list[str] = []
+            for path in pages_to_read[:12]:  # cap to avoid context overflow
+                try:
+                    page = vault.read_page(path)
+                    page_contents.append(f"### {path}\n\n{page.body}")
+                except Exception:
+                    pass
+
+            if not page_contents:
+                return "Nessuna pagina leggibile trovata per questa query."
+
+            # Build context block for the agent to use
+            context = "\n\n---\n\n".join(page_contents)
+            result = (
+                f"**Contesto vault per la query:** \"{question}\"\n\n"
+                f"Pagine consultate: {', '.join(pages_to_read[:12])}\n\n"
+                f"---\n\n{context}\n\n---\n\n"
+                "Rispondi ora in prima persona come Alessandro, citando le pagine usate."
+            )
+            vault.append_log(__import__("nanobot.business.wiki.models", fromlist=["LogEntry"]).LogEntry(
+                timestamp=__import__("datetime").datetime.now(),
+                type="query",
+                title=question[:80],
+            ))
+            return result
+        except Exception as exc:
+            logger.error("wiki_query error: {}", exc)
+            return f"Errore query vault: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# WikiLintTool  (Fase 3 — Lint)
+# ---------------------------------------------------------------------------
+
+@tool_parameters({"type": "object", "properties": {}, "required": []})
+class WikiLintTool(Tool):
+    """Esegue lint del vault: pagine orfane, beliefs stale, possibili contraddizioni."""
+
+    @property
+    def name(self) -> str:
+        return "wiki_lint"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Analizza il vault per problemi di manutenzione: pagine orfane senza link in entrata, "
+            "beliefs con confidence 'low' non aggiornate da più di WIKI_LINT_STALE_DAYS giorni, "
+            "pagine con stesso tag ma potenziali contraddizioni. "
+            "Restituisce un report formattato da presentare ad Alessandro."
+        )
+
+    async def execute(self, **kwargs: Any) -> str:
+        try:
+            from datetime import date, timedelta
+            vault = _get_vault()
+            cfg = __import__("nanobot.business.wiki.config", fromlist=["get_config"]).get_config()
+            issues: list[str] = []
+            index_text = vault.read_index()
+
+            # Check stale low-confidence beliefs
+            for path in vault.list_pages("beliefs"):
+                try:
+                    page = vault.read_page(path)
+                    fm = page.frontmatter
+                    if fm.confidence == "low":
+                        stale_threshold = date.today() - timedelta(days=cfg.lint_stale_days)
+                        if fm.updated < stale_threshold:
+                            issues.append(
+                                f"2. Belief stale (confidence: low, aggiornata {fm.updated}): "
+                                f"`{path}` — ancora valida?"
+                            )
+                except Exception:
+                    pass
+
+            # Check orphan pages (not mentioned in index)
+            for path in vault.list_pages():
+                if path not in index_text:
+                    issues.append(f"1. Pagina orfana: `{path}` — nessun riferimento in _index.md. Archiviare?")
+
+            if not issues:
+                vault.append_log(__import__("nanobot.business.wiki.models", fromlist=["LogEntry"]).LogEntry(
+                    timestamp=__import__("datetime").datetime.now(),
+                    type="lint",
+                    title="Lint completato — nessun problema trovato",
+                ))
+                return "✅ Lint completato — nessun problema trovato nel vault."
+
+            numbered = "\n".join(issues)
+            vault.append_log(__import__("nanobot.business.wiki.models", fromlist=["LogEntry"]).LogEntry(
+                timestamp=__import__("datetime").datetime.now(),
+                type="lint",
+                title=f"Lint: {len(issues)} punti",
+            ))
+            return (
+                f"🔍 **Lint wiki** — {len(issues)} punti da verificare:\n\n"
+                f"{numbered}\n\n"
+                "Rispondi punto per punto o ignora."
+            )
+        except Exception as exc:
+            logger.error("wiki_lint error: {}", exc)
+            return f"Errore lint: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# WikiSynthesisCheckTool  (Fase 3 — Synthesis trigger)
+# ---------------------------------------------------------------------------
+
+@tool_parameters({"type": "object", "properties": {}, "required": []})
+class WikiSynthesisCheckTool(Tool):
+    """Verifica se è il momento di proporre una synthesis (ogni N ingest)."""
+
+    @property
+    def name(self) -> str:
+        return "wiki_synthesis_check"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Controlla il contatore ingest nel _log.md. "
+            "Se ha raggiunto il trigger interval (WIKI_SYNTHESIS_TRIGGER_INTERVAL), "
+            "restituisce le ultime N riflessioni da analizzare per proporre nuovi pattern/beliefs. "
+            "Se non è il momento, restituisce un messaggio vuoto."
+        )
+
+    async def execute(self, **kwargs: Any) -> str:
+        try:
+            from nanobot.business.wiki.config import get_config
+            vault = _get_vault()
+            cfg = get_config()
+            stats = vault.get_stats()
+            ingest_count = stats["ingest_count"]
+
+            if ingest_count == 0 or ingest_count % cfg.synthesis_trigger_interval != 0:
+                return ""  # Not time yet
+
+            # Read recent sources and log for analysis
+            recent_sources: list[str] = []
+            for path in vault.list_pages("sources")[-cfg.synthesis_trigger_interval:]:
+                try:
+                    page = vault.read_page(path)
+                    recent_sources.append(f"**{path}**\n{page.body[:400]}")
+                except Exception:
+                    pass
+
+            if not recent_sources:
+                return ""
+
+            context = "\n\n---\n\n".join(recent_sources)
+            return (
+                f"🔄 **Synthesis trigger** — {ingest_count} ingest completati.\n\n"
+                f"Analizza le ultime {len(recent_sources)} fonti e proponi se emergono nuovi pattern:\n\n"
+                f"{context}\n\n"
+                "Se noti un pattern ricorrente, proponi: "
+                "'Ho notato un pattern in N riflessioni su [tema]. "
+                "Vuoi che crei patterns/[nome].md? Includerebbe: [3 bullet]'"
+            )
+        except Exception as exc:
+            logger.error("wiki_synthesis_check error: {}", exc)
+            return f"Errore synthesis check: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# WikiMem0SyncTool  (Fase 4 — Mem0 sync)
+# ---------------------------------------------------------------------------
+
+@tool_parameters({
+    "type": "object",
+    "properties": {
+        "full_resync": {
+            "type": "boolean",
+            "description": "Se true, risincronizza l'intero vault. Se false (default), sync solo pagina specificata.",
+        },
+        "path": {
+            "type": "string",
+            "description": "Path relativo della pagina da sincronizzare (ignorato se full_resync=true).",
+        },
+    },
+    "required": [],
+})
+class WikiMem0SyncTool(Tool):
+    """Sincronizza pagine wiki nei namespace Mem0 (wiki:beliefs, wiki:patterns, wiki:sources)."""
+
+    @property
+    def name(self) -> str:
+        return "wiki_mem0_sync"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Sincronizza una pagina (o l'intero vault) nei namespace Mem0 wiki:*. "
+            "Chiamare dopo ogni wiki_write_page per mantenere Mem0 aggiornato. "
+            "full_resync=true per recovery/migration completa."
+        )
+
+    async def execute(self, **kwargs: Any) -> str:
+        full_resync: bool = kwargs.get("full_resync", False)
+        path: str | None = kwargs.get("path")
+        try:
+            from nanobot.business.wiki.mem import sync_page_to_mem0, sync_vault_to_mem0
+            vault = _get_vault()
+
+            # Get memory backend from nanobot context
+            try:
+                from nanobot.agent.memory.mem0_backend import Mem0Backend
+                import os
+                db_url = os.environ.get("NANOBOT_MEMORY_DATABASE_URL", "")
+                backend = Mem0Backend(db_url) if db_url else None
+            except Exception:
+                backend = None
+
+            if backend is None:
+                return "⚠️ Mem0 backend non disponibile (NANOBOT_MEMORY_DATABASE_URL mancante)."
+
+            if full_resync:
+                summary = await sync_vault_to_mem0(backend, vault)
+                return f"✅ Mem0 full resync: {summary['synced']} pagine sincronizzate, {summary['errors']} errori."
+
+            if not path:
+                return "Specifica un path o usa full_resync=true."
+
+            section = path.split("/")[0] if "/" in path else "other"
+            page = vault.read_page(path)
+            await sync_page_to_mem0(backend, path, page.body, section)
+            return f"✅ Mem0 sync: {path} → wiki:{section}"
+
+        except Exception as exc:
+            logger.error("wiki_mem0_sync error: {}", exc)
+            return f"Errore Mem0 sync: {exc}"
