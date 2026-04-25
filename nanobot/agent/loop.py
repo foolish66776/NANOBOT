@@ -36,6 +36,16 @@ from nanobot.agent.tools.foolish import (
     FoolishPacklinkSetupTool,
     FoolishPacklinkGetLabelTool,
 )
+from nanobot.agent.tools.wiki import (
+    WikiStatsTool,
+    WikiReadPageTool,
+    WikiWritePageTool,
+    WikiListPagesTool,
+    WikiStoreRawTool,
+    WikiReadIndexTool,
+    WikiReadSchemaTool,
+    WikiAppendLogTool,
+)
 from nanobot.agent.tools.shell import ExecTool
 from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.web import WebFetchTool, WebSearchTool
@@ -308,6 +318,14 @@ class AgentLoop:
         self.tools.register(FoolishRegisterShipmentTool())
         self.tools.register(FoolishPacklinkSetupTool())
         self.tools.register(FoolishPacklinkGetLabelTool())
+        self.tools.register(WikiStatsTool())
+        self.tools.register(WikiReadPageTool())
+        self.tools.register(WikiWritePageTool())
+        self.tools.register(WikiListPagesTool())
+        self.tools.register(WikiStoreRawTool())
+        self.tools.register(WikiReadIndexTool())
+        self.tools.register(WikiReadSchemaTool())
+        self.tools.register(WikiAppendLogTool())
         if self.cron_service:
             self.tools.register(
                 CronTool(self.cron_service, default_timezone=self.context.timezone or "UTC")
