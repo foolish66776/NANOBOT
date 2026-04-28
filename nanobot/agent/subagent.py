@@ -143,12 +143,12 @@ class SubagentManager:
                 initial_messages=messages,
                 tools=tools,
                 model=self.model,
-                max_iterations=15,
+                max_iterations=40,
                 max_tool_result_chars=self.max_tool_result_chars,
                 hook=_SubagentHook(task_id),
                 max_iterations_message="Task completed but no final response was generated.",
                 error_message=None,
-                fail_on_tool_error=True,
+                fail_on_tool_error=False,
             ))
             if result.stop_reason == "tool_error":
                 await self._announce_result(
