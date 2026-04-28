@@ -35,6 +35,11 @@ from nanobot.agent.tools.foolish import (
     FoolishRegisterShipmentTool,
     FoolishPacklinkSetupTool,
     FoolishPacklinkGetLabelTool,
+    FoolishGetProductsTool,
+    FoolishUpdateProductTool,
+    FoolishDeactivateProductTool,
+    FoolishGetStorefrontOrdersTool,
+    FoolishLinkCustomerTelegramTool,
 )
 from nanobot.agent.tools.wiki import (
     WikiStatsTool,
@@ -325,6 +330,11 @@ class AgentLoop:
         self.tools.register(FoolishRegisterShipmentTool())
         self.tools.register(FoolishPacklinkSetupTool())
         self.tools.register(FoolishPacklinkGetLabelTool())
+        self.tools.register(FoolishGetProductsTool())
+        self.tools.register(FoolishUpdateProductTool())
+        self.tools.register(FoolishDeactivateProductTool())
+        self.tools.register(FoolishGetStorefrontOrdersTool())
+        self.tools.register(FoolishLinkCustomerTelegramTool())
         self.tools.register(WikiStatsTool())
         self.tools.register(WikiReadPageTool())
         self.tools.register(WikiWritePageTool())

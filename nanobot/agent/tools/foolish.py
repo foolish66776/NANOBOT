@@ -432,6 +432,333 @@ class FoolishPacklinkGetLabelTool(Tool):
 
 
 # ---------------------------------------------------------------------------
+# Payload CMS tools
+# ---------------------------------------------------------------------------
+
+
+def _cms_client():
+    from nanobot.business.foolish.config import get_config
+    from nanobot.business.foolish.cms import PayloadClient
+    cfg = get_config()
+    if not cfg.cms_url:
+        raise RuntimeError("FOOLISH_CMS_URL non configurata.")
+    if not cfg.cms_admin_email or not cfg.cms_admin_password:
+        raise RuntimeError("FOOLISH_CMS_ADMIN_EMAIL / FOOLISH_CMS_ADMIN_PASSWORD non configurate.")
+    return PayloadClient(cfg.cms_url, cfg.cms_admin_email, cfg.cms_admin_password)
+
+
+@tool_parameters(
+    {
+        "type": "object",
+        "properties": {
+            "section": {
+                "type": "string",
+                "description": "Filtra per sezione: 'tattoo' o 'pmu'. Ometti per tutti.",
+                "enum": ["tattoo", "pmu"],
+            },
+            "include_inactive": {
+                "type": "boolean",
+                "description": "Se true mostra anche prodotti non visibili in vetrina. Default false.",
+            },
+        },
+        "required": [],
+    }
+)
+class FoolishGetProductsTool(Tool):
+    """Elenca tutti i prodotti del catalogo Foolish Butcher con prezzi e stato stock."""
+
+    @property
+    def name(self) -> str:
+        return "foolish_get_products"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Elenca i prodotti del catalogo Foolish Butcher dal CMS. "
+            "Mostra nome, sezione, varianti con prezzi e disponibilità stock. "
+            "Usa per rispondere a domande su prodotti, prezzi, stock attuale."
+        )
+
+    async def execute(self, **kwargs: Any) -> str:
+        try:
+            client = _cms_client()
+            from nanobot.business.foolish.cms import _format_product_summary
+            section = kwargs.get("section") or None
+            active_only = not kwargs.get("include_inactive", False)
+            products = await client.get_products(active_only=active_only, section=section)
+            if not products:
+                return "Nessun prodotto trovato nel CMS."
+            lines = [_format_product_summary(p) for p in products]
+            return f"Prodotti ({len(products)}):\n\n" + "\n\n".join(lines)
+        except Exception as exc:
+            logger.error("foolish_get_products error: {}", exc)
+            return f"Errore: {exc}"
+
+
+@tool_parameters(
+    {
+        "type": "object",
+        "properties": {
+            "sku": {
+                "type": "string",
+                "description": "SKU della variante da aggiornare (es. DBL-A4, DUOSKIN-A5-PELLE).",
+            },
+            "slug": {
+                "type": "string",
+                "description": "Slug del prodotto da aggiornare (es. t-sheet-dbl). Usa sku O slug.",
+            },
+            "price": {
+                "type": "number",
+                "description": "Nuovo prezzo in €. Aggiorna solo la variante con lo SKU indicato.",
+            },
+            "stock_status": {
+                "type": "string",
+                "description": "Nuovo stato disponibilità della variante.",
+                "enum": ["available", "low", "unavailable"],
+            },
+            "limited_stock": {
+                "type": "boolean",
+                "description": "Se true, sposta il prodotto nella sezione Stock Limitato.",
+            },
+            "active": {
+                "type": "boolean",
+                "description": "Se false, nasconde il prodotto dalla vetrina.",
+            },
+        },
+        "required": [],
+    }
+)
+class FoolishUpdateProductTool(Tool):
+    """Aggiorna prezzo, stock o visibilità di un prodotto Foolish Butcher nel CMS."""
+
+    @property
+    def name(self) -> str:
+        return "foolish_update_product"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Aggiorna un prodotto nel CMS Foolish Butcher. "
+            "Puoi modificare prezzo e stock di una singola variante tramite SKU, "
+            "oppure la visibilità dell'intero prodotto tramite slug."
+        )
+
+    async def execute(self, **kwargs: Any) -> str:
+        try:
+            client = _cms_client()
+            from nanobot.business.foolish.cms import _format_product_summary
+
+            sku: str = (kwargs.get("sku") or "").strip().upper()
+            slug: str = (kwargs.get("slug") or "").strip()
+
+            if not sku and not slug:
+                return "Specifica 'sku' o 'slug' del prodotto da aggiornare."
+
+            product: dict | None = None
+            if slug:
+                product = await client.find_product_by_slug(slug)
+            elif sku:
+                product = await client.find_product_by_sku(sku)
+
+            if not product:
+                return f"Prodotto non trovato (sku={sku or '—'} slug={slug or '—'})."
+
+            update_data: dict = {}
+
+            if "active" in kwargs:
+                update_data["active"] = bool(kwargs["active"])
+            if "limited_stock" in kwargs:
+                update_data["limitedStock"] = bool(kwargs["limited_stock"])
+
+            # Variant-level updates (price / stockStatus)
+            if sku and ("price" in kwargs or "stock_status" in kwargs):
+                variants = [dict(v) for v in (product.get("variants") or [])]
+                matched = False
+                for v in variants:
+                    if v.get("sku", "").upper() == sku:
+                        if "price" in kwargs:
+                            v["price"] = float(kwargs["price"])
+                        if "stock_status" in kwargs:
+                            v["stockStatus"] = kwargs["stock_status"]
+                        matched = True
+                        break
+                if not matched:
+                    return f"SKU '{sku}' non trovato nelle varianti del prodotto '{product.get('name')}'."
+                update_data["variants"] = variants
+
+            if not update_data:
+                return "Nessuna modifica specificata."
+
+            updated = await client.update_product(product["id"], update_data)
+            return f"✅ Prodotto aggiornato:\n\n{_format_product_summary(updated)}"
+
+        except Exception as exc:
+            logger.error("foolish_update_product error: {}", exc)
+            return f"Errore: {exc}"
+
+
+@tool_parameters(
+    {
+        "type": "object",
+        "properties": {
+            "slug": {
+                "type": "string",
+                "description": "Slug URL del prodotto (es. kit-viso-pmu). Solo minuscole e trattini.",
+            },
+        },
+        "required": ["slug"],
+    }
+)
+class FoolishDeactivateProductTool(Tool):
+    """Nasconde un prodotto dalla vetrina senza eliminarlo."""
+
+    @property
+    def name(self) -> str:
+        return "foolish_deactivate_product"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Nasconde un prodotto dalla vetrina Foolish Butcher (active=false). "
+            "Il prodotto rimane nel CMS e può essere riattivato. "
+            "Usa quando un prodotto è esaurito o temporaneamente fuori produzione."
+        )
+
+    async def execute(self, **kwargs: Any) -> str:
+        try:
+            client = _cms_client()
+            slug = kwargs["slug"].strip()
+            product = await client.find_product_by_slug(slug)
+            if not product:
+                return f"Prodotto con slug '{slug}' non trovato."
+            await client.update_product(product["id"], {"active": False})
+            return f"✅ Prodotto '{product.get('name')}' (`{slug}`) nascosto dalla vetrina."
+        except Exception as exc:
+            logger.error("foolish_deactivate_product error: {}", exc)
+            return f"Errore: {exc}"
+
+
+@tool_parameters(
+    {
+        "type": "object",
+        "properties": {
+            "pipeline_state": {
+                "type": "string",
+                "description": "Filtra per stato pipeline. Ometti per tutti.",
+                "enum": [
+                    "received", "eta_pending", "eta_confirmed", "in_production",
+                    "matching_pending", "matched", "preview_sent", "shipped",
+                    "delivered", "followup_done", "closed",
+                ],
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Numero massimo di ordini da restituire. Default 15.",
+            },
+        },
+        "required": [],
+    }
+)
+class FoolishGetStorefrontOrdersTool(Tool):
+    """Elenca gli ordini ricevuti dallo storefront Foolish Butcher."""
+
+    @property
+    def name(self) -> str:
+        return "foolish_get_storefront_orders"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Elenca gli ordini storefront Foolish Butcher dal CMS Payload. "
+            "Mostra numero ordine, cliente, totale e stato pipeline. "
+            "Usa per monitorare ordini recenti o filtrare per stato."
+        )
+
+    async def execute(self, **kwargs: Any) -> str:
+        try:
+            client = _cms_client()
+            limit = int(kwargs.get("limit") or 15)
+            pipeline_state = kwargs.get("pipeline_state") or None
+            orders = await client.get_orders(pipeline_state=pipeline_state, limit=limit)
+            if not orders:
+                return "Nessun ordine trovato."
+
+            state_labels = {
+                "received": "Ricevuto", "eta_pending": "Att. ETA",
+                "eta_confirmed": "ETA ok", "in_production": "In produzione",
+                "matching_pending": "Att. matching", "matched": "Abbinato",
+                "preview_sent": "Preview inviata", "shipped": "Spedito",
+                "delivered": "Consegnato", "followup_done": "Follow-up fatto",
+                "closed": "Chiuso",
+            }
+            lines = []
+            for o in orders:
+                state = state_labels.get(o.get("pipelineState", ""), o.get("pipelineState", "?"))
+                lines.append(
+                    f"**#{o.get('orderNumber','?')}** — {o.get('customerName','?')} ({o.get('customerEmail','?')})\n"
+                    f"  {o.get('total','?')}€ | {state} | {o.get('createdAt','')[:10]}"
+                )
+            return f"Ordini ({len(orders)}):\n\n" + "\n\n".join(lines)
+        except Exception as exc:
+            logger.error("foolish_get_storefront_orders error: {}", exc)
+            return f"Errore: {exc}"
+
+
+@tool_parameters(
+    {
+        "type": "object",
+        "properties": {
+            "order_number": {
+                "type": "string",
+                "description": "Numero ordine storefront (es. FS-2026-001).",
+            },
+            "telegram_id": {
+                "type": "integer",
+                "description": "Telegram ID numerico del cliente.",
+            },
+        },
+        "required": ["order_number", "telegram_id"],
+    }
+)
+class FoolishLinkCustomerTelegramTool(Tool):
+    """Collega il Telegram ID di un cliente a un ordine storefront nel CMS."""
+
+    @property
+    def name(self) -> str:
+        return "foolish_link_customer_telegram"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Collega il Telegram ID di un cliente a un ordine nel CMS Payload. "
+            "Dopo il collegamento, le notifiche ordine vengono inviate su Telegram. "
+            "Usa quando il cliente ha avviato il bot con il deep link dell'ordine."
+        )
+
+    async def execute(self, **kwargs: Any) -> str:
+        try:
+            client = _cms_client()
+            import json as _json
+            order_number = str(kwargs["order_number"]).strip()
+            telegram_id = int(kwargs["telegram_id"])
+
+            orders = await client.get_orders(limit=100)
+            order = next((o for o in orders if o.get("orderNumber") == order_number), None)
+            if not order:
+                return f"Ordine '{order_number}' non trovato nel CMS."
+
+            await client.update_order(order["id"], {"customerTelegramId": str(telegram_id)})
+            return (
+                f"✅ Cliente collegato:\n"
+                f"Ordine {order_number} → Telegram ID `{telegram_id}`\n"
+                f"Le prossime notifiche partiranno via Telegram."
+            )
+        except Exception as exc:
+            logger.error("foolish_link_customer_telegram error: {}", exc)
+            return f"Errore: {exc}"
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 

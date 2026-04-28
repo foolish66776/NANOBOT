@@ -26,6 +26,9 @@ class FoolishConfig:
     r2_access_key_id: str
     r2_secret_access_key: str
     r2_public_url: str
+    cms_url: str
+    cms_admin_email: str
+    cms_admin_password: str
 
     def __init__(self) -> None:
         self.database_url = _require("FOOLISH_DATABASE_URL")
@@ -47,6 +50,9 @@ class FoolishConfig:
         self.r2_access_key_id = os.environ.get("FOOLISH_R2_ACCESS_KEY_ID", "")
         self.r2_secret_access_key = os.environ.get("FOOLISH_R2_SECRET_ACCESS_KEY", "")
         self.r2_public_url = os.environ.get("FOOLISH_R2_PUBLIC_URL", "")
+        self.cms_url = os.environ.get("FOOLISH_CMS_URL", "").rstrip("/")
+        self.cms_admin_email = os.environ.get("FOOLISH_CMS_ADMIN_EMAIL", "")
+        self.cms_admin_password = os.environ.get("FOOLISH_CMS_ADMIN_PASSWORD", "")
 
 
 def _require(key: str) -> str:
