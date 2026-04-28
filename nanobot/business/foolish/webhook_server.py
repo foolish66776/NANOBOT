@@ -1,9 +1,10 @@
 """aiohttp webhook server for The Foolish Butcher pipeline.
 
 Routes:
-  GET  /health/foolish          — health check
-  POST /hooks/woocommerce       — WooCommerce order.created / order.updated
-  POST /hooks/telegram/foolish  — Telegram updates (callback_query for ETA buttons)
+  GET  /health/foolish                — health check
+  POST /hooks/woocommerce             — WooCommerce order.created / order.updated
+  POST /hooks/telegram/foolish        — Telegram updates (callback_query for ETA buttons)
+  POST /hooks/foolish-storefront-order — Next.js storefront new order (Stripe checkout.session.completed)
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ def build_app(cfg: FoolishConfig) -> web.Application:
     app.router.add_get("/hooks/packlink", handler.packlink_ping)   # Packlink URL validation
     app.router.add_post("/hooks/packlink", handler.packlink)
     app.router.add_post("/hooks/telegram/foolish", handler.telegram_update)
+    app.router.add_post("/hooks/foolish-storefront-order", handler.storefront_order)
     app.on_startup.append(lambda _app: _startup(_app, cfg))
     app.on_cleanup.append(_cleanup)
     return app
@@ -85,6 +87,75 @@ class WebhookHandler:
 
     async def health(self, request: web.Request) -> web.Response:
         return web.json_response({"status": "ok", "service": "foolish"})
+
+    async def storefront_order(self, request: web.Request) -> web.Response:
+        """Handle new orders from the Next.js foolish storefront (via Stripe webhook)."""
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.Response(status=400, text="Invalid JSON")
+
+        stripe_session_id = payload.get("stripeSessionId", "")
+        external_ref = payload.get("externalRef", "")
+        amount = payload.get("amount", 0)
+        currency = payload.get("currency", "EUR")
+        customer_email = payload.get("customerEmail", "")
+        customer_name = payload.get("customerName", "")
+        items_json = payload.get("itemsJson", "")
+
+        logger.info(
+            "Storefront order received: ref={} session={} amount={}{} customer={}",
+            external_ref, stripe_session_id, amount, currency, customer_email,
+        )
+
+        cfg = request.app["cfg"]
+        pool = request.app["pool"]
+
+        try:
+            items = json.loads(items_json) if items_json else []
+        except Exception:
+            items = []
+
+        items_summary = ", ".join(
+            f"{i.get('sku', '?')} x{i.get('qty', 1)}" for i in items
+        ) or "—"
+
+        await send_to_alessandro(
+            cfg,
+            f"🛒 <b>Nuovo ordine storefront!</b>\n"
+            f"Ref: <code>{external_ref}</code>\n"
+            f"Cliente: {customer_name} ({customer_email})\n"
+            f"Totale: {amount:.2f} {currency}\n"
+            f"Prodotti: {items_summary}\n"
+            f"Stripe session: <code>{stripe_session_id}</code>",
+        )
+
+        order_repo = OrderRepo(pool)
+        message_repo = MessageRepo(pool)
+        await handle_order_received(
+            {
+                "id": stripe_session_id,
+                "number": external_ref,
+                "status": "processing",
+                "total": str(amount),
+                "currency": currency,
+                "billing": {
+                    "email": customer_email,
+                    "first_name": customer_name,
+                    "last_name": "",
+                },
+                "line_items": [
+                    {"sku": i.get("sku", ""), "quantity": i.get("qty", 1)}
+                    for i in items
+                ],
+                "_source": "storefront",
+            },
+            cfg,
+            order_repo,
+            message_repo,
+        )
+
+        return web.Response(status=200, text="ok")
 
     async def woocommerce(self, request: web.Request) -> web.Response:
         body = await request.read()
