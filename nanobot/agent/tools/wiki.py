@@ -9,7 +9,7 @@ from loguru import logger
 from nanobot.agent.tools.base import Tool, tool_parameters
 
 
-def _get_vault() -> "VaultManager":
+async def _get_vault() -> "VaultManager":
     from nanobot.business.wiki.config import get_config
     from nanobot.business.wiki.vault import VaultManager
     cfg = get_config()
@@ -23,6 +23,7 @@ def _get_vault() -> "VaultManager":
             author_name=cfg.git_author_name,
             author_email=cfg.git_author_email,
         )
+        await git_mgr.ensure_repo_initialized()
     return VaultManager(cfg.vault_path, git_manager=git_mgr)
 
 
@@ -54,7 +55,7 @@ class WikiStatsTool(Tool):
 
     async def execute(self, **kwargs: Any) -> str:
         try:
-            vault = _get_vault()
+            vault = await _get_vault()
             stats = vault.get_stats()
             lines = [
                 "📚 **Wiki stats**",
@@ -101,7 +102,7 @@ class WikiReadPageTool(Tool):
     async def execute(self, **kwargs: Any) -> str:
         path: str = kwargs["path"]
         try:
-            vault = _get_vault()
+            vault = await _get_vault()
             page = vault.read_page(path)
             fm = page.frontmatter.model_dump(exclude_none=True)
             return f"**{path}**\n\nFrontmatter: {fm}\n\n---\n\n{page.body}"
@@ -184,7 +185,7 @@ class WikiWritePageTool(Tool):
 
         try:
             from datetime import date
-            vault = _get_vault()
+            vault = await _get_vault()
 
             try:
                 existing = vault.read_page(path)
@@ -248,7 +249,7 @@ class WikiListPagesTool(Tool):
     async def execute(self, **kwargs: Any) -> str:
         section: str | None = kwargs.get("section")
         try:
-            vault = _get_vault()
+            vault = await _get_vault()
             pages = vault.list_pages(section)
             if not pages:
                 return "Nessuna pagina trovata."
@@ -329,7 +330,7 @@ class WikiReadIndexTool(Tool):
 
     async def execute(self, **kwargs: Any) -> str:
         try:
-            vault = _get_vault()
+            vault = await _get_vault()
             content = vault.read_index()
             if not content:
                 return "⚠️ _index.md non trovato o vuoto."
@@ -361,7 +362,7 @@ class WikiReadSchemaTool(Tool):
 
     async def execute(self, **kwargs: Any) -> str:
         try:
-            vault = _get_vault()
+            vault = await _get_vault()
             content = vault.read_schema()
             if not content:
                 return "⚠️ _schema.md non trovato."
@@ -411,7 +412,7 @@ class WikiAppendLogTool(Tool):
         title: str = kwargs["title"]
         detail: str = kwargs.get("detail", "")
         try:
-            vault = _get_vault()
+            vault = await _get_vault()
             vault.append_log(LogEntry(
                 timestamp=datetime.now(),
                 type=entry_type,
@@ -463,7 +464,7 @@ class WikiQueryTool(Tool):
         question: str = kwargs["question"]
         sections: list[str] | None = kwargs.get("sections")
         try:
-            vault = _get_vault()
+            vault = await _get_vault()
             index = vault.read_index()
             pages_to_read: list[str] = []
             for section in (sections or ["beliefs", "patterns", "business"]):
@@ -530,7 +531,7 @@ class WikiLintTool(Tool):
     async def execute(self, **kwargs: Any) -> str:
         try:
             from datetime import date, timedelta
-            vault = _get_vault()
+            vault = await _get_vault()
             cfg = __import__("nanobot.business.wiki.config", fromlist=["get_config"]).get_config()
             issues: list[str] = []
             index_text = vault.read_index()
@@ -603,7 +604,7 @@ class WikiSynthesisCheckTool(Tool):
     async def execute(self, **kwargs: Any) -> str:
         try:
             from nanobot.business.wiki.config import get_config
-            vault = _get_vault()
+            vault = await _get_vault()
             cfg = get_config()
             stats = vault.get_stats()
             ingest_count = stats["ingest_count"]
@@ -675,7 +676,7 @@ class WikiMem0SyncTool(Tool):
         path: str | None = kwargs.get("path")
         try:
             from nanobot.business.wiki.mem import sync_page_to_mem0, sync_vault_to_mem0
-            vault = _get_vault()
+            vault = await _get_vault()
 
             # Get memory backend from nanobot context
             try:
@@ -786,7 +787,7 @@ class WikiIngestSourceTool(Tool):
         body += "## Connessioni wiki\n\n*(da completare)*\n"
 
         try:
-            vault = _get_vault()
+            vault = await _get_vault()
             raw = _get_raw()
             raw.store_raw(f"{title}\n{source_url or ''}\n{summary}\n{alessandros_take}", "text", source_url=source_url)
             vault.create_page(path=path, page_type="source", title=title, body=body, tags=tags)
@@ -885,7 +886,7 @@ class WikiIngestBusinessIdeaTool(Tool):
         body += "## Connessioni\n\n*(da completare — collega a beliefs/ e patterns/ pertinenti)*\n"
 
         try:
-            vault = _get_vault()
+            vault = await _get_vault()
             raw = _get_raw()
             raw.store_raw(f"{title}\n{description}\n{pain_point}\n{who_pays}\n{why_now}", "text")
             vault.create_page(path=path, page_type="business", title=title, body=body,
@@ -921,7 +922,7 @@ class WikiGitPullTool(Tool):
 
     async def execute(self, **kwargs: Any) -> str:
         try:
-            vault = _get_vault()
+            vault = await _get_vault()
             await vault.pull()
             return "✅ git pull completato — vault aggiornato."
         except Exception as exc:
