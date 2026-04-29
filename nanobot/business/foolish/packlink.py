@@ -9,7 +9,19 @@ from loguru import logger
 
 
 def _headers(api_key: str) -> dict:
-    return {"Authorization": f"Apikey {api_key}", "Content-Type": "application/json"}
+    return {"Authorization": f"Apikey {api_key.strip()}", "Content-Type": "application/json"}
+
+
+def _raise_with_body(resp: "httpx.Response") -> None:
+    """Raise HTTPStatusError logging the response body first."""
+    if resp.is_error:
+        logger.error(
+            "Packlink API error: {} {} — body: {}",
+            resp.status_code,
+            resp.request.url,
+            resp.text[:500],
+        )
+        resp.raise_for_status()
 
 
 _WEBHOOK_EVENTS = [
@@ -88,7 +100,7 @@ async def get_shipment(api_key: str, base_url: str, reference: str) -> dict[str,
             f"{base_url}/shipments/{reference}",
             headers=_headers(api_key),
         )
-        resp.raise_for_status()
+        _raise_with_body(resp)
         data = resp.json()
         return data.get("data", data) if isinstance(data, dict) else data
 
@@ -102,7 +114,7 @@ async def get_label_url(api_key: str, base_url: str, reference: str) -> str | No
         )
         if resp.status_code == 404:
             return None
-        resp.raise_for_status()
+        _raise_with_body(resp)
         data = resp.json()
         inner = data.get("data", data) if isinstance(data, dict) else {}
         # Packlink returns {"data": {"label_url": "...", "pdf": "..."}}
@@ -138,7 +150,7 @@ async def get_available_services(
             headers=_headers(api_key),
             params=params,
         )
-        resp.raise_for_status()
+        _raise_with_body(resp)
         data = resp.json()
         services = data.get("data", data) if isinstance(data, dict) else data
         result = []
@@ -230,13 +242,15 @@ async def create_shipment_draft(
     if service_id:
         payload["service_id"] = service_id
 
+    _key = api_key.strip()
+    logger.debug("Packlink create_shipment_draft: key_len={} key_prefix={}", len(_key), _key[:4])
     async with httpx.AsyncClient(timeout=20) as client:
         resp = await client.post(
             f"{base_url}/shipments",
-            headers=_headers(api_key),
+            headers=_headers(_key),
             json=payload,
         )
-        resp.raise_for_status()
+        _raise_with_body(resp)
         data = resp.json()
         inner = data.get("data", data) if isinstance(data, dict) else data
 
