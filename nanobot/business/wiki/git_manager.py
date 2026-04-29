@@ -141,14 +141,24 @@ class GitManager:
     # ------------------------------------------------------------------
 
     async def ensure_repo_initialized(self) -> None:
-        """Clona il repo se non esiste ancora. Il remote è la fonte di verità."""
+        """Clona il repo se non esiste o è rotto. Il remote è la fonte di verità."""
         import shutil
 
+        needs_clone = False
         git_dir = self.repo_path / ".git"
-        if git_dir.exists():
+        if not git_dir.exists():
+            needs_clone = True
+        else:
+            # Verifica che il repo abbia almeno un commit (git init senza clone → HEAD unborn)
+            try:
+                await self._run(["git", "rev-parse", "HEAD"])
+            except (GitError, Exception):
+                logger.warning("GitManager: .git exists but repo is broken, re-cloning")
+                needs_clone = True
+
+        if not needs_clone:
             return
 
-        # Rimuove qualsiasi contenuto pre-esistente senza .git (es. primo deploy)
         if self.repo_path.exists():
             shutil.rmtree(str(self.repo_path))
         self.repo_path.mkdir(parents=True, exist_ok=True)
