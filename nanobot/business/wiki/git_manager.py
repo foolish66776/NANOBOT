@@ -85,9 +85,9 @@ class GitManager:
     # ------------------------------------------------------------------
 
     async def pull(self) -> None:
-        """git pull origin main — all'avvio e prima di ogni read."""
+        """git pull --rebase origin main — all'avvio e prima di ogni read."""
         try:
-            await self._run(["git", "pull", "origin", "main"])
+            await self._run(["git", "pull", "--rebase", "origin", "main"])
             logger.info("GitManager: pull OK")
         except GitError as e:
             logger.warning("GitManager: pull failed — {}", e)
@@ -168,6 +168,7 @@ class GitManager:
                 ["git", "clone", self.remote_url, "."],
                 cwd=self.repo_path,
             )
+            await self._run(["git", "config", "pull.rebase", "true"])
             logger.info("GitManager: cloned {} into {}", self.remote_url, self.repo_path)
         except GitError as e:
             logger.error("GitManager: clone failed — {}", e)
