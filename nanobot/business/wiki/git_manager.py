@@ -141,29 +141,26 @@ class GitManager:
     # ------------------------------------------------------------------
 
     async def ensure_repo_initialized(self) -> None:
-        """Inizializza o clona il repo se non esiste ancora."""
+        """Clona il repo se non esiste ancora. Il remote è la fonte di verità."""
+        import shutil
+
         git_dir = self.repo_path / ".git"
         if git_dir.exists():
             return
-        if not any(self.repo_path.iterdir()) if self.repo_path.exists() else True:
-            # Cartella vuota o inesistente — clona
-            self.repo_path.mkdir(parents=True, exist_ok=True)
-            try:
-                await self._run(
-                    ["git", "clone", self.remote_url, "."],
-                    cwd=self.repo_path,
-                )
-                logger.info("GitManager: cloned {} into {}", self.remote_url, self.repo_path)
-            except GitError as e:
-                logger.error("GitManager: clone failed — {}", e)
-        else:
-            # Cartella con contenuto ma no .git — init + remote
-            await self._run(["git", "init"], cwd=self.repo_path)
+
+        # Rimuove qualsiasi contenuto pre-esistente senza .git (es. primo deploy)
+        if self.repo_path.exists():
+            shutil.rmtree(str(self.repo_path))
+        self.repo_path.mkdir(parents=True, exist_ok=True)
+
+        try:
             await self._run(
-                ["git", "remote", "add", "origin", self.remote_url],
+                ["git", "clone", self.remote_url, "."],
                 cwd=self.repo_path,
             )
-            logger.info("GitManager: initialized existing dir as git repo")
+            logger.info("GitManager: cloned {} into {}", self.remote_url, self.repo_path)
+        except GitError as e:
+            logger.error("GitManager: clone failed — {}", e)
 
     # ------------------------------------------------------------------
     # Internal
@@ -185,17 +182,17 @@ class GitManager:
         loop = asyncio.get_event_loop()
         cwd = cwd or self.repo_path
         env = self._build_env(env_extra)
-        await loop.run_in_executor(
-            None,
-            lambda: subprocess.run(
-                cmd,
-                cwd=cwd,
-                env=env,
-                check=True,
-                capture_output=True,
-                text=True,
-            ),
-        )
+
+        def _exec() -> None:
+            result = subprocess.run(
+                cmd, cwd=cwd, env=env, capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                stderr = (result.stderr or result.stdout or "").strip()
+                logger.error("GitManager cmd failed: {} — {}", " ".join(cmd), stderr[:400])
+                raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
+
+        await loop.run_in_executor(None, _exec)
 
     async def _run_output(
         self,
