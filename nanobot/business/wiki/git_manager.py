@@ -85,24 +85,25 @@ class GitManager:
     # ------------------------------------------------------------------
 
     async def pull(self) -> None:
-        """git pull --rebase origin main — stash modifiche locali prima, pop dopo."""
-        stashed = False
+        """Sincronizza con il remote: fetch + reset --hard origin/main + clean.
+
+        Il remote è la fonte di verità. Niente rebase, niente merge, niente conflitti.
+        I commit locali non pushati vengono scartati (write_page + commit_and_push
+        devono completare prima del prossimo pull).
+        """
         try:
-            # Stash any uncommitted local changes (write_page is fire-and-forget)
-            result = await self._run_output(["git", "status", "--porcelain"])
-            if result.strip():
-                await self._run(["git", "stash", "--include-untracked"])
-                stashed = True
-            await self._run(["git", "pull", "--rebase", "origin", "main"])
-            logger.info("GitManager: pull OK")
+            # Abort any in-progress rebase/merge to recover from broken state
+            rebase_dir = self.repo_path / ".git" / "rebase-merge"
+            if rebase_dir.exists():
+                await self._run(["git", "rebase", "--abort"])
+                logger.warning("GitManager: aborted in-progress rebase before pull")
+
+            await self._run(["git", "fetch", "origin"])
+            await self._run(["git", "reset", "--hard", "origin/main"])
+            await self._run(["git", "clean", "-fd"])
+            logger.info("GitManager: pull OK (reset to origin/main)")
         except GitError as e:
             logger.warning("GitManager: pull failed — {}", e)
-        finally:
-            if stashed:
-                try:
-                    await self._run(["git", "stash", "pop"])
-                except GitError as e:
-                    logger.warning("GitManager: stash pop failed — {}", e)
 
     async def commit_and_push(self, message: str, files: list[str]) -> None:
         """
