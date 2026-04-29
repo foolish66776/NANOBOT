@@ -766,9 +766,9 @@ class FoolishLinkCustomerTelegramTool(Tool):
             "to_surname": {"type": "string", "description": "Cognome del destinatario."},
             "to_street": {"type": "string", "description": "Via e numero civico del destinatario."},
             "to_city": {"type": "string", "description": "Città del destinatario."},
-            "to_zip": {"type": "string", "description": "CAP del destinatario."},
-            "to_country": {"type": "string", "description": "Codice paese ISO 2 lettere (es. IT, DE, FR)."},
-            "to_phone": {"type": "string", "description": "Telefono del destinatario (con prefisso internazionale)."},
+            "to_zip": {"type": "string", "description": "CAP del destinatario (es. 36100). OBBLIGATORIO — non lasciare vuoto."},
+            "to_country": {"type": "string", "description": "Codice PAESE ISO 2 lettere: IT=Italia, DE=Germania, FR=Francia, ES=Spagna, GB=UK. NON usare il codice provincia italiano (VI, TO, MI…) — quello è diverso. Default: IT."},
+            "to_phone": {"type": "string", "description": "Telefono del destinatario (con prefisso internazionale, es. +393481234567)."},
             "to_email": {"type": "string", "description": "Email del destinatario."},
             "to_company": {"type": "string", "description": "Azienda destinatario (opzionale)."},
             "weight_kg": {"type": "number", "description": "Peso del pacco in kg (es. 0.3 per un foglio A4)."},
@@ -779,7 +779,7 @@ class FoolishLinkCustomerTelegramTool(Tool):
             "content_value": {"type": "number", "description": "Valore dichiarato in EUR. Default 25."},
             "service_id": {"type": "string", "description": "ID servizio Packlink (opzionale). Se omesso la bozza viene creata senza corriere selezionato."},
         },
-        "required": ["to_name", "to_surname", "to_street", "to_city", "to_zip", "to_country", "to_phone", "to_email", "weight_kg"],
+        "required": ["to_name", "to_surname", "to_street", "to_city", "to_zip", "to_phone", "to_email", "weight_kg"],
     }
 )
 class FoolishCreateShipmentDraftTool(Tool):
@@ -807,6 +807,8 @@ class FoolishCreateShipmentDraftTool(Tool):
             if not cfg.packlink_api_key:
                 return "Errore: FOOLISH_PACKLINK_API_KEY non configurata."
 
+            to_country = _normalize_country(kwargs.get("to_country", "IT"))
+
             result = await create_shipment_draft(
                 cfg.packlink_api_key,
                 cfg.packlink_base_url,
@@ -824,7 +826,7 @@ class FoolishCreateShipmentDraftTool(Tool):
                 to_street=kwargs["to_street"],
                 to_city=kwargs["to_city"],
                 to_zip=kwargs["to_zip"],
-                to_country=kwargs["to_country"],
+                to_country=to_country,
                 to_phone=kwargs["to_phone"],
                 to_email=kwargs["to_email"],
                 to_company=kwargs.get("to_company", ""),
@@ -845,7 +847,7 @@ class FoolishCreateShipmentDraftTool(Tool):
                 f"✅ Bozza spedizione creata su Packlink.",
                 f"Riferimento: `{ref}`",
                 f"Stato: {status}",
-                f"Destinatario: {kwargs['to_name']} {kwargs['to_surname']}, {kwargs['to_city']} ({kwargs['to_country']})",
+                f"Destinatario: {kwargs['to_name']} {kwargs['to_surname']}, {kwargs['to_city']} ({to_country})",
             ]
             if url:
                 lines.append(f"👉 Rivedi e paga: {url}")
@@ -929,6 +931,30 @@ class FoolishGetShippingServicesTool(Tool):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+# Codici provincia italiani — se il LLM li passa come "paese" li correggiamo a "IT"
+_IT_PROVINCES = {
+    "AG","AL","AN","AO","AP","AQ","AR","AT","AV","BA","BG","BI","BL","BN","BO",
+    "BR","BS","BT","BZ","CA","CB","CE","CH","CL","CN","CO","CR","CS","CT","CZ",
+    "EN","FC","FE","FG","FI","FM","FR","GE","GO","GR","IM","IS","KR","LC","LE",
+    "LI","LO","LT","LU","MB","MC","ME","MI","MN","MO","MS","MT","NA","NO","NU",
+    "OR","PA","PC","PD","PE","PG","PI","PN","PO","PR","PT","PU","PV","PZ","RA",
+    "RC","RE","RG","RI","RM","RN","RO","SA","SI","SO","SP","SR","SS","SU","SV",
+    "TA","TE","TN","TO","TP","TR","TS","TV","UD","VA","VB","VC","VE","VI","VR",
+    "VT","VV",
+}
+
+
+def _normalize_country(code: str) -> str:
+    """Corregge codici provincia italiani passati per errore come paese."""
+    c = (code or "").strip().upper()
+    if not c:
+        return "IT"
+    if c in _IT_PROVINCES:
+        logger.warning("Packlink: codice provincia '{}' corretto a 'IT'", c)
+        return "IT"
+    return c
+
 
 async def _generate_serial(pool, fmt: str, produced_at: date) -> str:
     yy = str(produced_at.year)[2:]
