@@ -85,12 +85,24 @@ class GitManager:
     # ------------------------------------------------------------------
 
     async def pull(self) -> None:
-        """git pull --rebase origin main — all'avvio e prima di ogni read."""
+        """git pull --rebase origin main — stash modifiche locali prima, pop dopo."""
+        stashed = False
         try:
+            # Stash any uncommitted local changes (write_page is fire-and-forget)
+            result = await self._run_output(["git", "status", "--porcelain"])
+            if result.strip():
+                await self._run(["git", "stash", "--include-untracked"])
+                stashed = True
             await self._run(["git", "pull", "--rebase", "origin", "main"])
             logger.info("GitManager: pull OK")
         except GitError as e:
             logger.warning("GitManager: pull failed — {}", e)
+        finally:
+            if stashed:
+                try:
+                    await self._run(["git", "stash", "pop"])
+                except GitError as e:
+                    logger.warning("GitManager: stash pop failed — {}", e)
 
     async def commit_and_push(self, message: str, files: list[str]) -> None:
         """
