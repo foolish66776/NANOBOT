@@ -847,7 +847,8 @@ class FoolishCreateShipmentDraftTool(Tool):
                 f"✅ Bozza spedizione creata su Packlink.",
                 f"Riferimento: `{ref}`",
                 f"Stato: {status}",
-                f"Destinatario: {kwargs['to_name']} {kwargs['to_surname']}, {kwargs['to_city']} ({to_country})",
+                f"Destinatario: {kwargs['to_name']} {kwargs['to_surname']}",
+                f"Indirizzo: {kwargs['to_street']}, {kwargs['to_zip']} {kwargs['to_city']} ({to_country})",
             ]
             if url:
                 lines.append(f"👉 Rivedi e paga: {url}")
