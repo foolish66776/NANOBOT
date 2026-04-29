@@ -208,29 +208,27 @@ async def create_shipment_draft(
     service_id: str = "",
 ) -> dict[str, Any]:
     """Crea una bozza di spedizione su Packlink Pro. Restituisce reference + URL dashboard."""
+    def _addr(name: str, surname: str, company: str, street: str, city: str,
+              zip_code: str, country: str, phone: str, email: str) -> dict:
+        d: dict = {
+            "name": name,
+            "surname": surname,
+            "street1": street,
+            "city": city,
+            "zip_code": zip_code,
+            "country": country.upper(),
+            "phone": phone,
+            "email": email,
+        }
+        if company:
+            d["company"] = company
+        return d
+
     payload: dict[str, Any] = {
-        "from": {
-            "name": from_name,
-            "surname": from_surname,
-            "company": from_company,
-            "street1": from_street,
-            "city": from_city,
-            "zip_code": from_zip,
-            "country": from_country.upper(),
-            "phone": from_phone,
-            "email": from_email,
-        },
-        "to": {
-            "name": to_name,
-            "surname": to_surname,
-            "company": to_company,
-            "street1": to_street,
-            "city": to_city,
-            "zip_code": to_zip,
-            "country": to_country.upper(),
-            "phone": to_phone,
-            "email": to_email,
-        },
+        "from": _addr(from_name, from_surname, from_company, from_street,
+                      from_city, from_zip, from_country, from_phone, from_email),
+        "to": _addr(to_name, to_surname, to_company, to_street,
+                    to_city, to_zip, to_country, to_phone, to_email),
         "packages": [
             {
                 "width": width_cm,
@@ -240,8 +238,7 @@ async def create_shipment_draft(
             }
         ],
         "content": content,
-        "content_value": content_value,
-        "source": "api",
+        "contentValue": content_value,
     }
     if service_id:
         payload["service_id"] = service_id
