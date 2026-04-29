@@ -9,7 +9,11 @@ from loguru import logger
 
 
 def _headers(api_key: str) -> dict:
-    return {"Authorization": f"Apikey {api_key.strip()}", "Content-Type": "application/json"}
+    key = api_key.strip()
+    # Packlink Pro API accepts both "Apikey" and "Bearer" — logged for debug
+    scheme = "Bearer"
+    logger.debug("Packlink auth: scheme={} key_len={} key_prefix={}", scheme, len(key), key[:4])
+    return {"Authorization": f"{scheme} {key}", "Content-Type": "application/json"}
 
 
 def _raise_with_body(resp: "httpx.Response") -> None:
