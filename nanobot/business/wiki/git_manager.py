@@ -17,6 +17,24 @@ class GitError(Exception):
     pass
 
 
+def _normalize_ssh_key(content: str) -> str:
+    """Ricostruisce il formato PEM con newline corretti.
+
+    Railway può salvare la chiave come singola riga senza \n.
+    SSH richiede header/footer su righe separate e base64 a max 70 char/riga.
+    """
+    content = content.strip()
+    BEGIN = "-----BEGIN OPENSSH PRIVATE KEY-----"
+    END = "-----END OPENSSH PRIVATE KEY-----"
+    if BEGIN not in content:
+        return content + "\n"
+    # Estrae il body base64 strippando header/footer e tutti i whitespace
+    body = content.replace(BEGIN, "").replace(END, "").replace("\n", "").replace("\r", "").replace(" ", "")
+    # Ricostruisce con wrap a 70 chars (standard PEM)
+    wrapped = "\n".join(body[i:i+70] for i in range(0, len(body), 70))
+    return f"{BEGIN}\n{wrapped}\n{END}\n"
+
+
 class GitManager:
     """
     Gestisce git operations sul vault.
@@ -49,9 +67,7 @@ class GitManager:
     def _setup_ssh_key(self, content: str) -> None:
         """Scrive SSH key privata in tempfile chmod 600."""
         f = tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False)
-        f.write(content)
-        if not content.endswith("\n"):
-            f.write("\n")
+        f.write(_normalize_ssh_key(content))
         f.flush()
         f.close()
         os.chmod(f.name, stat.S_IRUSR | stat.S_IWUSR)
