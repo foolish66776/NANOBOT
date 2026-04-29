@@ -9,11 +9,8 @@ from loguru import logger
 
 
 def _headers(api_key: str) -> dict:
-    key = api_key.strip()
-    # Packlink Pro API accepts both "Apikey" and "Bearer" — logged for debug
-    scheme = "Bearer"
-    logger.debug("Packlink auth: scheme={} key_len={} key_prefix={}", scheme, len(key), key[:4])
-    return {"Authorization": f"{scheme} {key}", "Content-Type": "application/json"}
+    # Packlink Pro API: chiave grezza senza prefisso (né "Apikey" né "Bearer")
+    return {"Authorization": api_key.strip(), "Content-Type": "application/json"}
 
 
 def _raise_with_body(resp: "httpx.Response") -> None:
@@ -243,12 +240,10 @@ async def create_shipment_draft(
     if service_id:
         payload["service_id"] = service_id
 
-    _key = api_key.strip()
-    logger.debug("Packlink create_shipment_draft: key_len={} key_prefix={}", len(_key), _key[:4])
     async with httpx.AsyncClient(timeout=20) as client:
         resp = await client.post(
             f"{base_url}/shipments",
-            headers=_headers(_key),
+            headers=_headers(api_key),
             json=payload,
         )
         _raise_with_body(resp)
