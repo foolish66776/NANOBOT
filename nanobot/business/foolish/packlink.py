@@ -109,6 +109,157 @@ async def get_label_url(api_key: str, base_url: str, reference: str) -> str | No
         return inner.get("pdf") or inner.get("label_url") or inner.get("url")
 
 
+async def get_available_services(
+    api_key: str,
+    base_url: str,
+    from_country: str,
+    from_zip: str,
+    to_country: str,
+    to_zip: str,
+    weight_kg: float,
+    width_cm: float = 30,
+    height_cm: float = 5,
+    length_cm: float = 30,
+) -> list[dict[str, Any]]:
+    """Elenca i servizi di spedizione disponibili con prezzi per una tratta e un pacco."""
+    params = {
+        "from[country]": from_country.upper(),
+        "from[zip]": from_zip,
+        "to[country]": to_country.upper(),
+        "to[zip]": to_zip,
+        "packages[0][width]": width_cm,
+        "packages[0][height]": height_cm,
+        "packages[0][length]": length_cm,
+        "packages[0][weight]": weight_kg,
+    }
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await client.get(
+            f"{base_url}/services/available",
+            headers=_headers(api_key),
+            params=params,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        services = data.get("data", data) if isinstance(data, dict) else data
+        result = []
+        for s in (services if isinstance(services, list) else []):
+            result.append({
+                "id": s.get("id") or s.get("service_id") or "",
+                "name": s.get("name") or s.get("service_name") or "",
+                "carrier": s.get("carrier_name") or s.get("carrier") or "",
+                "price": s.get("base_price") or s.get("price") or s.get("total_price") or 0,
+                "currency": s.get("currency") or "EUR",
+                "transit_days": s.get("transit_days") or s.get("delivery_days") or "",
+                "dropoff": s.get("dropoff") or False,
+            })
+        result.sort(key=lambda x: float(x["price"] or 0))
+        return result
+
+
+async def create_shipment_draft(
+    api_key: str,
+    base_url: str,
+    *,
+    # mittente
+    from_name: str,
+    from_surname: str,
+    from_company: str,
+    from_street: str,
+    from_city: str,
+    from_zip: str,
+    from_country: str,
+    from_phone: str,
+    from_email: str,
+    # destinatario
+    to_name: str,
+    to_surname: str,
+    to_street: str,
+    to_city: str,
+    to_zip: str,
+    to_country: str,
+    to_phone: str,
+    to_email: str,
+    to_company: str = "",
+    # pacco
+    weight_kg: float,
+    width_cm: float = 30,
+    height_cm: float = 5,
+    length_cm: float = 30,
+    # contenuto
+    content: str = "Practice skin for tattoo",
+    content_value: float = 25.0,
+    # servizio (opzionale — se omesso resta bozza da completare nel dashboard)
+    service_id: str = "",
+) -> dict[str, Any]:
+    """Crea una bozza di spedizione su Packlink Pro. Restituisce reference + URL dashboard."""
+    payload: dict[str, Any] = {
+        "from": {
+            "name": from_name,
+            "surname": from_surname,
+            "company": from_company,
+            "street1": from_street,
+            "city": from_city,
+            "zip_code": from_zip,
+            "country": from_country.upper(),
+            "phone": from_phone,
+            "email": from_email,
+        },
+        "to": {
+            "name": to_name,
+            "surname": to_surname,
+            "company": to_company,
+            "street1": to_street,
+            "city": to_city,
+            "zip_code": to_zip,
+            "country": to_country.upper(),
+            "phone": to_phone,
+            "email": to_email,
+        },
+        "packages": [
+            {
+                "width": width_cm,
+                "height": height_cm,
+                "length": length_cm,
+                "weight": weight_kg,
+            }
+        ],
+        "content": content,
+        "content_value": content_value,
+        "source": "api",
+    }
+    if service_id:
+        payload["service_id"] = service_id
+
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await client.post(
+            f"{base_url}/shipments",
+            headers=_headers(api_key),
+            json=payload,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        inner = data.get("data", data) if isinstance(data, dict) else data
+
+    reference = (
+        inner.get("shipment_custom_reference")
+        or inner.get("reference")
+        or inner.get("id")
+        or ""
+    )
+    dashboard_url = f"https://pro.packlink.com/private/shipments/{reference}" if reference else ""
+
+    logger.info(
+        "Packlink draft created: ref={} to={} {} {}",
+        reference, to_name, to_surname, to_city,
+    )
+    return {
+        "reference": reference,
+        "dashboard_url": dashboard_url,
+        "status": inner.get("state") or inner.get("status") or "draft",
+        "raw": inner,
+    }
+
+
 def parse_webhook_event(payload: dict) -> dict[str, str]:
     """Normalize a Packlink webhook payload to {reference, carrier_tracking, status}."""
     # Packlink Pro wraps events in a "data" key

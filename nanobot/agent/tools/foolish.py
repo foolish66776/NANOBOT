@@ -758,6 +758,174 @@ class FoolishLinkCustomerTelegramTool(Tool):
             return f"Errore: {exc}"
 
 
+@tool_parameters(
+    {
+        "type": "object",
+        "properties": {
+            "to_name": {"type": "string", "description": "Nome del destinatario."},
+            "to_surname": {"type": "string", "description": "Cognome del destinatario."},
+            "to_street": {"type": "string", "description": "Via e numero civico del destinatario."},
+            "to_city": {"type": "string", "description": "Città del destinatario."},
+            "to_zip": {"type": "string", "description": "CAP del destinatario."},
+            "to_country": {"type": "string", "description": "Codice paese ISO 2 lettere (es. IT, DE, FR)."},
+            "to_phone": {"type": "string", "description": "Telefono del destinatario (con prefisso internazionale)."},
+            "to_email": {"type": "string", "description": "Email del destinatario."},
+            "to_company": {"type": "string", "description": "Azienda destinatario (opzionale)."},
+            "weight_kg": {"type": "number", "description": "Peso del pacco in kg (es. 0.3 per un foglio A4)."},
+            "width_cm": {"type": "number", "description": "Larghezza pacco in cm. Default 30."},
+            "height_cm": {"type": "number", "description": "Altezza pacco in cm. Default 5."},
+            "length_cm": {"type": "number", "description": "Lunghezza pacco in cm. Default 30."},
+            "content": {"type": "string", "description": "Descrizione contenuto per la dogana. Default: 'Practice skin for tattoo'."},
+            "content_value": {"type": "number", "description": "Valore dichiarato in EUR. Default 25."},
+            "service_id": {"type": "string", "description": "ID servizio Packlink (opzionale). Se omesso la bozza viene creata senza corriere selezionato."},
+        },
+        "required": ["to_name", "to_surname", "to_street", "to_city", "to_zip", "to_country", "to_phone", "to_email", "weight_kg"],
+    }
+)
+class FoolishCreateShipmentDraftTool(Tool):
+    """Crea una bozza di spedizione su Packlink Pro e restituisce il link diretto per revisione e pagamento."""
+
+    @property
+    def name(self) -> str:
+        return "foolish_create_shipment_draft"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Crea una bozza di spedizione su Packlink Pro con i dati del destinatario. "
+            "La spedizione viene creata in stato 'draft' — Alessandro può rivederla e pagarla "
+            "direttamente su Packlink senza che venga addebitato nulla automaticamente. "
+            "Restituisce il riferimento Packlink e il link diretto alla bozza."
+        )
+
+    async def execute(self, **kwargs: Any) -> str:
+        try:
+            from nanobot.business.foolish.config import get_config
+            from nanobot.business.foolish.packlink import create_shipment_draft
+
+            cfg = get_config()
+            if not cfg.packlink_api_key:
+                return "Errore: FOOLISH_PACKLINK_API_KEY non configurata."
+
+            result = await create_shipment_draft(
+                cfg.packlink_api_key,
+                cfg.packlink_base_url,
+                from_name=cfg.packlink_sender_name,
+                from_surname=cfg.packlink_sender_surname,
+                from_company=cfg.packlink_sender_company,
+                from_street=cfg.packlink_sender_street,
+                from_city=cfg.packlink_sender_city,
+                from_zip=cfg.packlink_sender_zip,
+                from_country=cfg.packlink_sender_country,
+                from_phone=cfg.packlink_sender_phone,
+                from_email=cfg.packlink_sender_email,
+                to_name=kwargs["to_name"],
+                to_surname=kwargs["to_surname"],
+                to_street=kwargs["to_street"],
+                to_city=kwargs["to_city"],
+                to_zip=kwargs["to_zip"],
+                to_country=kwargs["to_country"],
+                to_phone=kwargs["to_phone"],
+                to_email=kwargs["to_email"],
+                to_company=kwargs.get("to_company", ""),
+                weight_kg=float(kwargs["weight_kg"]),
+                width_cm=float(kwargs.get("width_cm", 30)),
+                height_cm=float(kwargs.get("height_cm", 5)),
+                length_cm=float(kwargs.get("length_cm", 30)),
+                content=kwargs.get("content", "Practice skin for tattoo"),
+                content_value=float(kwargs.get("content_value", 25.0)),
+                service_id=kwargs.get("service_id", ""),
+            )
+
+            ref = result["reference"]
+            url = result["dashboard_url"]
+            status = result["status"]
+
+            lines = [
+                f"✅ Bozza spedizione creata su Packlink.",
+                f"Riferimento: `{ref}`",
+                f"Stato: {status}",
+                f"Destinatario: {kwargs['to_name']} {kwargs['to_surname']}, {kwargs['to_city']} ({kwargs['to_country']})",
+            ]
+            if url:
+                lines.append(f"👉 Rivedi e paga: {url}")
+            else:
+                lines.append("Apri Packlink Pro per completare e pagare la spedizione.")
+
+            return "\n".join(lines)
+
+        except Exception as exc:
+            logger.error("foolish_create_shipment_draft error: {}", exc)
+            return f"Errore creazione bozza Packlink: {exc}"
+
+
+@tool_parameters(
+    {
+        "type": "object",
+        "properties": {
+            "to_country": {"type": "string", "description": "Codice paese ISO destinazione (es. IT, DE, FR)."},
+            "to_zip": {"type": "string", "description": "CAP di destinazione."},
+            "weight_kg": {"type": "number", "description": "Peso del pacco in kg."},
+            "width_cm": {"type": "number", "description": "Larghezza in cm. Default 30."},
+            "height_cm": {"type": "number", "description": "Altezza in cm. Default 5."},
+            "length_cm": {"type": "number", "description": "Lunghezza in cm. Default 30."},
+        },
+        "required": ["to_country", "to_zip", "weight_kg"],
+    }
+)
+class FoolishGetShippingServicesTool(Tool):
+    """Elenca i servizi di spedizione Packlink disponibili con prezzi per una destinazione e peso."""
+
+    @property
+    def name(self) -> str:
+        return "foolish_get_shipping_services"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Elenca corrieri e prezzi disponibili su Packlink Pro per una spedizione "
+            "dalla sede Foolish verso una destinazione, dato il peso del pacco. "
+            "Utile per mostrare ad Alessandro le opzioni prima di creare la bozza."
+        )
+
+    async def execute(self, **kwargs: Any) -> str:
+        try:
+            from nanobot.business.foolish.config import get_config
+            from nanobot.business.foolish.packlink import get_available_services
+
+            cfg = get_config()
+            if not cfg.packlink_api_key:
+                return "Errore: FOOLISH_PACKLINK_API_KEY non configurata."
+
+            services = await get_available_services(
+                cfg.packlink_api_key,
+                cfg.packlink_base_url,
+                from_country=cfg.packlink_sender_country,
+                from_zip=cfg.packlink_sender_zip,
+                to_country=kwargs["to_country"],
+                to_zip=kwargs["to_zip"],
+                weight_kg=float(kwargs["weight_kg"]),
+                width_cm=float(kwargs.get("width_cm", 30)),
+                height_cm=float(kwargs.get("height_cm", 5)),
+                length_cm=float(kwargs.get("length_cm", 30)),
+            )
+
+            if not services:
+                return "Nessun servizio disponibile per questa tratta."
+
+            lines = [f"Servizi disponibili ({kwargs['to_country']} {kwargs['to_zip']}, {kwargs['weight_kg']}kg):\n"]
+            for s in services[:10]:
+                price = f"€{s['price']:.2f}" if s["price"] else "N/D"
+                days = f", {s['transit_days']} gg" if s["transit_days"] else ""
+                lines.append(f"• [{s['id']}] {s['name']} — {price}{days}")
+
+            return "\n".join(lines)
+
+        except Exception as exc:
+            logger.error("foolish_get_shipping_services error: {}", exc)
+            return f"Errore: {exc}"
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
