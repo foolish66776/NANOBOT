@@ -266,8 +266,7 @@ class Mem0Backend(MemoryBackend):
                 mem = self._ensure_mem0()
                 result = await mem.search(
                     query,
-                    user_id=self._user_id,
-                    agent_id=container_tag,
+                    filters={"user_id": self._user_id, "agent_id": container_tag},
                     limit=limit,
                 )
                 hits = result.get("results") if isinstance(result, dict) else (result or [])
@@ -298,8 +297,7 @@ class Mem0Backend(MemoryBackend):
             try:
                 mem = self._ensure_mem0()
                 result = await mem.get_all(
-                    user_id=self._user_id,
-                    agent_id=container_tag,
+                    filters={"user_id": self._user_id, "agent_id": container_tag},
                     limit=_PROFILE_RECENT + _PROFILE_STATIC,
                 )
                 entries = result.get("results") if isinstance(result, dict) else (result or [])
