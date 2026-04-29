@@ -1000,7 +1000,24 @@ def gateway(
     ))
     console.print("[green]✓[/green] Foolish followup: ogni 15 minuti")
 
+    # Status/dashboard HTTP server
+    _dashboard_token = os.environ.get("NANOBOT_DASHBOARD_TOKEN", "")
+    _status_port = int(os.environ.get("PORT", os.environ.get("NANOBOT_STATUS_PORT", port)))
+    from nanobot.gateway.status_server import create_status_app, install_log_sink
+    install_log_sink()
+    _status_app = create_status_app(
+        cron_service=cron,
+        workspace=config.workspace_path,
+        dashboard_token=_dashboard_token or None,
+    )
+    console.print(f"[green]✓[/green] Dashboard: http://0.0.0.0:{_status_port}/dashboard")
+
     async def run():
+        from aiohttp import web as _web
+        runner = _web.AppRunner(_status_app)
+        await runner.setup()
+        site = _web.TCPSite(runner, "0.0.0.0", _status_port)
+        await site.start()
         try:
             await cron.start()
             await heartbeat.start()
@@ -1021,6 +1038,7 @@ def gateway(
             cron.stop()
             agent.stop()
             await channels.stop_all()
+            await runner.cleanup()
 
     asyncio.run(run())
 
