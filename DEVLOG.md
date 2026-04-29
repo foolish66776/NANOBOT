@@ -57,6 +57,33 @@ Sessione: 12 ore, poi richiede nuovo login.
 
 ## Changelog
 
+### 2026-04-29 (sessione pomeriggio)
+
+**Fix volume Railway non scrivibile** (`Dockerfile`)
+- Il container girava come utente `nanobot` (UID 1000) ma il volume Railway è owned da root → `/data/workspace` non scrivibile → workspace clonata in `/tmp` ad ogni riavvio e persa al restart
+- Fix: rimosso `USER nanobot` dal Dockerfile, il container ora gira come root (compatibile con Railway volumes)
+- Effetto: dopo il prossimo deploy, `/data/workspace` sarà scrivibile e il workspace persisterà tra i riavvii
+
+**Fix Mem0 API** (`nanobot/agent/memory/mem0_backend.py`)
+- Versione aggiornata di mem0ai non accetta più `user_id`/`agent_id` come parametri top-level in `search()` e `get_all()`
+- Fix: spostati in `filters={'user_id': ..., 'agent_id': ...}`
+- Effetto: eliminati i WARNING costanti `Top-level entity parameters frozenset({'user_id', 'agent_id'}) are not supported` ad ogni messaggio
+
+**Fix NANOBOT_CONFIG_JSON** (Railway env var)
+- `workspace` puntava a `~/dev/nanobot-workspace` (path locale) → aggiornato a `/data/workspace`
+- Business line `wiki` mancante dalla config → aggiunta (il bot Telegram era già registrato ma senza profilo)
+
+**Fix Packlink error logging** (`nanobot/business/foolish/packlink.py`)
+- `raise_for_status()` non loggava il body delle risposte di errore → impossibile diagnosticare i problemi
+- Aggiunta `_raise_with_body()` che logga status + body prima di sollevare l'eccezione
+- Trim sull'API key per intercettare spazi residui da Railway variables
+- Diagnosi confermata: Packlink restituisce **401** (non 404) — l'API key `FOOLISH_PACKLINK_API_KEY` (64 chars, prefix `a20e`) è sbagliata o scaduta
+- **Azione richiesta**: ottenere la chiave corretta da Packlink Pro → Settings → Integrations → API, poi `railway variables set FOOLISH_PACKLINK_API_KEY=<nuova_chiave>`
+
+**Fix foolish-storefront build** (`storefront/package.json`, `storefront/package-lock.json`)
+- `next-intl` (aggiunto nella sessione mattina) richiede `@swc/helpers>=0.5.17` ma il lock file aveva `0.5.15`
+- Fix: `npm install @swc/helpers@latest` → `0.5.21` installato come dep esplicita
+
 ### 2026-04-29
 
 **Dashboard di monitoraggio** (`nanobot/gateway/status_server.py`)
