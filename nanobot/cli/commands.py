@@ -1528,7 +1528,7 @@ def _run_gateway(
                     )
                 else:
                     _tok_param = f"?token={_logs_token}" if _logs_token else ""
-                    _html_page = """<!DOCTYPE html>
+                    _html_page = f"""<!DOCTYPE html>
 <html lang="it">
 <head>
 <meta charset="utf-8">
@@ -1618,7 +1618,7 @@ refresh();
 setInterval(refresh,5000);
 
 if('serviceWorker' in navigator){{
-  navigator.serviceWorker.register('/logs/sw.js').catch(()=>{{}});
+  navigator.serviceWorker.register('/logs/sw.js{_tok_param}').catch(()=>{{}});
 }}
 </script>
 </body>

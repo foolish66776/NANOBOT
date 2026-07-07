@@ -12,6 +12,66 @@ This file tracks every modification made to nanobot for the Frank deployment.
 3. Re-apply any patch that was lost. Mark it `re-applied` with the date.
 4. Run `ruff check nanobot/` and restart Frank.
 
+## Secrets and environment
+
+- Shared process variables live in `~/.nanobot/.env`.
+- Frank-specific secrets live in `~/.config/nanobot/frank.env`.
+- The systemd unit loads both files; do not reintroduce secrets into the unit file.
+- Keep `frank.env` readable only by the deploy user (`chmod 600`).
+- If a secret was exposed in chat, logs, or a unit file, rotate it and refresh the env file before the next restart.
+
+### Frank env schema
+
+Keep the service-specific file grouped like this:
+
+```text
+# Core runtime
+NANOBOT_OBSIDIAN_VAULT
+
+# Model / LLM providers
+DEEPSEEK_API_KEY
+OPENROUTER_API_KEY
+
+# Telegram / restart notifications
+FRANK_TELEGRAM_BOT_TOKEN
+FRANK_TELEGRAM_CHAT_ID
+
+# Shipping / storefront
+PACKLINK_API_KEY
+PACKLINK_SENDER_NAME
+PACKLINK_SENDER_SURNAME
+PACKLINK_SENDER_STREET
+PACKLINK_SENDER_CITY
+PACKLINK_SENDER_ZIP
+PACKLINK_SENDER_COUNTRY
+PACKLINK_SENDER_PHONE
+PACKLINK_SENDER_EMAIL
+FOOLISH_WOO_BASE_URL
+FOOLISH_WOO_CONSUMER_KEY
+FOOLISH_WOO_CONSUMER_SECRET
+FOOLISH_PAYLOAD_URL
+FOOLISH_PAYLOAD_EMAIL
+FOOLISH_PAYLOAD_PASSWORD
+FOOLISH_PAYLOAD_SECRET
+FOOLISH_STOREFRONT_DIR
+FOOLISH_CUSTOMER_BOT_TOKEN
+FOOLISH_CUSTOMER_WH_SECRET
+
+# Analytics / reporting
+RESEND_API_KEY
+FOOLISH_UMAMI_URL
+FOOLISH_UMAMI_USERNAME
+FOOLISH_UMAMI_PASSWORD
+FOOLISH_UMAMI_WEBSITE_ID
+
+# Integrations
+AGENTMAIL_CONCR3TICA_API_KEY
+AGENTMAIL_FOOLISH_API_KEY
+GITHUB_TOKEN
+```
+
+Shared process variables such as `TAVILY_API_KEY` stay in `~/.nanobot/.env`.
+
 ---
 
 ## Patches

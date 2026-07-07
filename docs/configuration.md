@@ -132,6 +132,16 @@ TELEGRAM_TOKEN=your-token-here
 IMAP_PASSWORD=your-password-here
 ```
 
+If you already keep a shared `~/.nanobot/.env`, you can layer it with a service-specific file by listing both:
+
+```ini
+[Service]
+EnvironmentFile=-/home/youruser/.nanobot/.env
+EnvironmentFile=/home/youruser/.config/nanobot/frank.env
+```
+
+Use the optional leading `-` for the shared file only when it may be absent; keep the service-specific file strict (`mode 600`) and store only secrets there.
+
 **Docker** — pass an env file to the locally built image (one `KEY=VALUE` per line), or use `-e KEY=value`:
 
 ```bash

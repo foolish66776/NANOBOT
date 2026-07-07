@@ -715,7 +715,13 @@ class TelegramChannel(BaseChannel):
 
         if self._app:
             self.logger.info("Stopping bot...")
-            await self._app.updater.stop()
+            # Updater may not be running if start_polling() failed or was never called
+            try:
+                await self._app.updater.stop()
+            except RuntimeError as e:
+                if "not running" not in str(e):
+                    raise
+                self.logger.debug("Updater was not running, skipping stop")
             await self._app.stop()
             await self._app.shutdown()
             self._app = None

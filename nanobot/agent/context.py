@@ -17,6 +17,7 @@ from nanobot.utils.helpers import (
     current_time_str,
     detect_image_mime,
     load_bundled_template,
+    truncate_text,
     truncate_text_to_tokens,
 )
 from nanobot.utils.prompt_templates import render_template
