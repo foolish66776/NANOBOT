@@ -26,6 +26,7 @@ from telegram.ext import Application, CallbackQueryHandler, ContextTypes, Messag
 from telegram.request import HTTPXRequest
 
 from nanobot.bus.events import OutboundMessage
+from nanobot.bus.outbound_events import ProgressEvent
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.command.builtin import build_help_text
@@ -36,7 +37,7 @@ from nanobot.utils.helpers import split_message
 
 TELEGRAM_MAX_MESSAGE_LEN = 4000  # Telegram message character limit
 # Telegram's actual API limit is 4096; we split raw markdown at 4000 as a
-# safety margin for mid-stream edits (plain text).  For _stream_end, we split
+# safety margin for mid-stream edits (plain text).  On stream end, we split
 # raw markdown into chunks whose rendered HTML fits Telegram's true 4096-char
 # boundary so the final rendered message never overflows.
 TELEGRAM_HTML_MAX_LEN = 4096
@@ -351,6 +352,8 @@ class TelegramConfig(Base):
     streaming: bool = True
     # Enable inline keyboard buttons in Telegram messages.
     inline_keyboards: bool = False
+    # Opt in to Bot API 10.1 sendRichMessage for richer markdown rendering.
+    rich_messages: bool = False
     stream_edit_interval: float = Field(default=_STREAM_EDIT_INTERVAL_DEFAULT, ge=0.1)
     webhook_url: str = ""
     webhook_listen_host: str = "127.0.0.1"
@@ -412,19 +415,21 @@ class TelegramChannel(BaseChannel):
         BotCommand("status", "Show bot status"),
         BotCommand("history", "Show recent conversation messages"),
         BotCommand("goal", "Start a sustained objective (long-running task)"),
+        BotCommand("trigger", "Create a named local trigger"),
         BotCommand("pairing", "Manage DM pairing (approve/deny/list)"),
         BotCommand("model", "Switch runtime model preset"),
         BotCommand("skill", "List enabled skills"),
         BotCommand("dream", "Run Dream memory consolidation now"),
         BotCommand("dream_log", "Show the latest Dream memory change"),
         BotCommand("dream_restore", "Restore Dream memory to an earlier version"),
+        BotCommand("dream_prompt", "Tell Dream how to organize memory"),
         BotCommand("help", "Show available commands"),
     ]
 
     # Regex for slash commands routed to AgentLoop via ``_forward_command``.
     # Hyphenated ``dream-*`` commands stay on a separate handler (below).
     TELEGRAM_BUS_SLASH_COMMAND_RE = re.compile(
-        r"^/(?:new|stop|restart|status|dream|history|goal|pairing|model|skill)(?:@\w+)?(?:\s+.*)?$"
+        r"^/(?:new|stop|restart|status|dream|history|goal|trigger|pairing|model|skill)(?:@\w+)?(?:\s+.*)?$"
     )
 
     @classmethod
@@ -477,6 +482,8 @@ class TelegramChannel(BaseChannel):
             return content.replace("/dream_log", "/dream-log", 1)
         if content == "/dream_restore" or content.startswith("/dream_restore "):
             return content.replace("/dream_restore", "/dream-restore", 1)
+        if content == "/dream_prompt" or content.startswith("/dream_prompt "):
+            return content.replace("/dream_prompt", "/dream-prompt", 1)
         return content
 
     async def start(self) -> None:
@@ -523,7 +530,9 @@ class TelegramChannel(BaseChannel):
         )
         self._app.add_handler(
             MessageHandler(
-                filters.Regex(r"^/(dream-log|dream_log|dream-restore|dream_restore)(?:@\w+)?(?:\s+.*)?$"),
+                filters.Regex(
+                    r"^/(dream-log|dream_log|dream-restore|dream_restore|dream-prompt|dream_prompt)(?:@\w+)?(?:\s+.*)?$"
+                ),
                 self._forward_command,
             )
         )
@@ -815,8 +824,10 @@ class TelegramChannel(BaseChannel):
             self.logger.warning("bot not running")
             return
 
+        progress_event = msg.event if isinstance(msg.event, ProgressEvent) else None
+
         # Only stop typing indicator and remove reaction for final responses
-        if not msg.metadata.get("_progress", False):
+        if progress_event is None:
             self._stop_typing(msg.chat_id)
             if reply_to_message_id := msg.metadata.get("message_id"):
                 with suppress(ValueError):
@@ -901,7 +912,7 @@ class TelegramChannel(BaseChannel):
 
         # Send text content
         if msg.content and msg.content != "[empty message]":
-            render_as_blockquote = bool(msg.metadata.get("_tool_hint"))
+            render_as_blockquote = bool(progress_event and progress_event.tool_hint)
             buttons = getattr(msg, "buttons", None) or []
             reply_markup = self._build_keyboard(buttons) if buttons else None
             text = msg.content
@@ -914,6 +925,7 @@ class TelegramChannel(BaseChannel):
             # latches off permanently if the server doesn't support it.
             if (
                 not render_as_blockquote
+                and self.config.rich_messages
                 and not getattr(self, "_rich_send_disabled", False)
             ):
                 rich_ok = await self._try_send_rich(
@@ -995,15 +1007,23 @@ class TelegramChannel(BaseChannel):
     def _is_not_modified_error(exc: Exception) -> bool:
         return isinstance(exc, BadRequest) and "message is not modified" in str(exc).lower()
 
-    async def send_delta(self, chat_id: str, delta: str, metadata: dict[str, Any] | None = None) -> None:
+    async def send_delta(
+        self,
+        chat_id: str,
+        delta: str,
+        metadata: dict[str, Any] | None = None,
+        *,
+        stream_id: str | None = None,
+        stream_end: bool = False,
+        resuming: bool = False,
+    ) -> None:
         """Progressive message editing: send on first delta, edit on subsequent ones."""
         if not self._app:
             return
         meta = metadata or {}
         int_chat_id = int(chat_id)
-        stream_id = meta.get("_stream_id")
 
-        if meta.get("_stream_end"):
+        if stream_end:
             buf = self._stream_bufs.get(chat_id)
             if not buf or not buf.message_id or not buf.text:
                 return
@@ -1022,7 +1042,7 @@ class TelegramChannel(BaseChannel):
             # Skip when a streaming preview already exists to avoid the
             # delete-and-resend pattern that causes flickering and drops
             # line breaks (issue #4470).
-            if not buf.message_id and not getattr(self, "_rich_send_disabled", False):
+            if not buf.message_id and self.config.rich_messages and not getattr(self, "_rich_send_disabled", False):
                 reply_params = None
                 if reply_to_message_id := meta.get("message_id"):
                     reply_params = {"message_id": int(reply_to_message_id), "allow_sending_without_reply": True}

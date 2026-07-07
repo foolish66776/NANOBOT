@@ -41,7 +41,7 @@ If you are not sure where a setting belongs, start from the task you are trying 
 | Make the first model reply work | `providers.<name>.apiKey`, optional `providers.<name>.apiBase`, `modelPresets.<preset>`, `agents.defaults.modelPreset` | `nanobot status`, then `nanobot agent -m "Hello!"` | [Providers](#providers), [Model Presets](#model-presets) |
 | Add fallback models | `modelPresets.<fallback>`, `agents.defaults.fallbackModels` | `nanobot status`, then a normal agent run | [Model Fallbacks](#model-fallbacks) |
 | Keep secrets out of the config file | `${ENV_VAR}` placeholders inside any string value | Start nanobot from the same environment that sets the variable | [Environment Variables for Secrets](#environment-variables-for-secrets) |
-| Open the bundled WebUI | `channels.websocket.enabled`, optional `channels.websocket.port`, `channels.websocket.tokenIssueSecret` | `nanobot gateway`, then open `http://127.0.0.1:8765` | [Channel Settings](#channel-settings), [WebSocket docs](./websocket.md) |
+| Open the bundled WebUI | `channels.websocket.enabled`, optional `channels.websocket.port`, `channels.websocket.tokenIssueSecret` | `nanobot webui` | [Channel Settings](#channel-settings), [WebSocket docs](./websocket.md) |
 | Connect one chat app | `channels.<channel>.enabled`, channel credentials, `channels.<channel>.allowFrom` | `nanobot channels status`, then `nanobot gateway --verbose` | [Channel Settings](#channel-settings), [Chat Apps](./chat-apps.md) |
 | Enable voice transcription | `transcription.enabled`, `transcription.provider`, matching `providers.<name>.apiKey` | Send or upload a short voice message through a configured surface | [Transcription Settings](#transcription-settings) |
 | Enable web search or fetch | `tools.web.search.*`, `tools.web.fetch.*`, optional `tools.ssrfWhitelist` | Ask a question that requires current web information, then inspect logs if needed | [Web Tools](#web-tools), [Security](#security) |
@@ -49,7 +49,7 @@ If you are not sure where a setting belongs, start from the task you are trying 
 | Add external tools through MCP | `tools.mcpServers.<name>` | Start `nanobot gateway --verbose` and check startup/tool logs | [MCP](#mcp-model-context-protocol) |
 | Tighten tool and network safety | `tools.restrictToWorkspace`, `tools.exec.sandbox`, `tools.ssrfWhitelist`, `channels.*.allowFrom` | Run the same workflow through the channel or CLI you plan to expose | [Security](#security), [Pairing](#pairing) |
 | Tune request timeouts or process concurrency | `NANOBOT_LLM_TIMEOUT_S`, `NANOBOT_STREAM_IDLE_TIMEOUT_S`, `NANOBOT_MAX_CONCURRENT_REQUESTS` | Start nanobot from the same environment and inspect startup/runtime logs | [Runtime Environment Variables](#runtime-environment-variables) |
-| Run multiple isolated bots | separate `--config` and `--workspace` paths, plus distinct `gateway.port` or channel ports when processes run together | Start each process with explicit paths and run `nanobot status` for the default instance only | [Multiple Instances](./multiple-instances.md), [CLI Reference](./cli-reference.md) |
+| Run multiple isolated bots | separate `--config` and `--workspace` paths, plus distinct `gateway.port` or channel ports when processes run together | Use the same explicit paths with `nanobot status`, `agent`, `webui`, `gateway`, and `serve` | [Multiple Instances](./multiple-instances.md), [CLI Reference](./cli-reference.md) |
 | Observe model calls | `LANGFUSE_SECRET_KEY`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_BASE_URL` environment variables | Run one model call, then check the matching Langfuse project | [Langfuse Observability](#langfuse-observability) |
 
 ## Environment Variables for Secrets
@@ -242,7 +242,7 @@ Tracing covers the providers that go through nanobot's OpenAI-compatible client 
 > - **MiniMax thinking mode**: `providers.minimaxAnthropic` is the config block for `reasoningEffort` / thinking mode. MiniMax exposes that capability through its Anthropic-compatible endpoint, so nanobot keeps it as a separate provider instead of guessing MiniMax-specific thinking parameters on the generic OpenAI-compatible `minimax` endpoint. It uses the same `MINIMAX_API_KEY`. Default Anthropic-compatible base URL: `https://api.minimax.io/anthropic`; for mainland China use `https://api.minimaxi.com/anthropic`.
 > - **Kimi Coding Plan**: Use `providers.kimiCoding` with `provider: "kimi_coding"` for Kimi's dedicated Anthropic Messages API endpoint. The endpoint requires a Claude-compatible `User-Agent`; nanobot sends `claude-code/0.1.0` by default, and you can override it with `extraHeaders.User-Agent` if your account requires a different value.
 > - **VolcEngine / BytePlus Coding Plan**: Subscription endpoints are configured through dedicated providers `volcengineCodingPlan` or `byteplusCodingPlan`, separate from the pay-per-use `volcengine` / `byteplus` providers.
-> - **OpenCode Zen / Go**: `providers.opencodeZen` and `providers.opencodeGo` use the same `OPENCODE_API_KEY`, but route to different OpenCode gateways. These providers use OpenCode's OpenAI-compatible `chat/completions` endpoints; choose model IDs from that endpoint family.
+> - **OpenCode Zen / Go**: `providers.opencode` (canonical Zen), the legacy-compatible `providers.opencodeZen`, and `providers.opencodeGo` use the same `OPENCODE_API_KEY`, but route to different OpenCode gateways. These providers use OpenCode's OpenAI-compatible `chat/completions` endpoints; choose model IDs from that endpoint family.
 > - **Zhipu Coding Plan**: If you're on Zhipu's coding plan, set `"apiBase": "https://open.bigmodel.cn/api/coding/paas/v4"` in your zhipu provider config.
 > - **Alibaba Cloud BaiLian**: If you're using Alibaba Cloud BaiLian's OpenAI-compatible endpoint, set `"apiBase": "https://dashscope.aliyuncs.com/compatible-mode/v1"` in your dashscope provider config.
 > - **StepFun Step Plan**: If you're on StepFun's Step Plan subscription, set `"apiBase": "https://api.stepfun.ai/step_plan/v1"` in your stepfun provider config. Supported models include `step-3.5-flash`, `step-3.5-flash-2603`, and `step-router-v1`.
@@ -250,12 +250,14 @@ Tracing covers the providers that go through nanobot's OpenAI-compatible client 
 > - **Xiaomi MiMo thinking mode**: MiMo models (e.g. `mimo-v2.5-pro`) default to enabled thinking. Use `agents.defaults.reasoningEffort: "none"` to disable it, or `"low"` / `"medium"` / `"high"` to keep it on. Omitting the field preserves the provider's per-model default.
 > - **Xiaomi MiMo Token Plan**: If you're on MiMo's token plan, set `"apiBase": "https://token-plan-sgp.xiaomimimo.com/v1"` in your xiaomi_mimo provider config.
 > - **Custom OpenAI-compatible providers**: Besides the built-in `custom` provider, any extra key under `providers` can define its own OpenAI-compatible endpoint. For example, `providers.companyProxy.apiBase` plus `modelPresets.primary.provider: "companyProxy"` creates a separate custom provider. Set `apiBase`; set `apiKey` only when the endpoint requires it. This named-custom path uses the OpenAI-compatible request format only. For Anthropic-compatible proxies, use `providers.anthropic.apiBase` with `provider: "anthropic"`.
+> - **Provider-scoped proxy**: `providers.<name>.proxy` routes only that provider through an HTTP proxy. It is supported for OpenAI-compatible providers and `openai_codex`. Native provider backends such as `anthropic`, `bedrock`, `azure_openai`, and `github_copilot` reject `proxy`.
 
 | Provider | Purpose | Get API Key |
 |----------|---------|-------------|
 | `custom` | Any OpenAI-compatible endpoint | — |
 | `openrouter` | LLM gateway for hosted model families + Voice transcription (STT models) | [openrouter.ai](https://openrouter.ai) |
-| `opencode_zen` | LLM gateway (OpenCode Zen coding-agent models) | [opencode.ai/docs/zen](https://opencode.ai/docs/zen/) |
+| `opencode` | LLM gateway (OpenCode Zen coding-agent models) | [opencode.ai/docs/zen](https://opencode.ai/docs/zen/) |
+| `opencode_zen` | LLM gateway (legacy alias for OpenCode Zen) | [opencode.ai/docs/zen](https://opencode.ai/docs/zen/) |
 | `opencode_go` | LLM gateway (OpenCode Go low-cost coding models) | [opencode.ai/docs/go](https://opencode.ai/docs/go/) |
 | `huggingface` | LLM (Hugging Face Inference Providers) | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) |
 | `skywork` | LLM (Skywork / APIFree API gateway) | [apifree.ai](https://www.apifree.ai) |
@@ -389,7 +391,7 @@ Omit `apiKey` (or leave it empty / unset). The provider falls back to [`DefaultA
 Install the optional dependency:
 
 ```bash
-python -m pip install 'nanobot-ai[azure]'
+nanobot plugins enable azure
 ```
 
 `DefaultAzureCredential` walks this chain in order and uses the first identity that succeeds:
@@ -404,7 +406,7 @@ python -m pip install 'nanobot-ai[azure]'
 
 The identity that ends up signing the request **must be assigned the `Cognitive Services OpenAI User` RBAC role** (or higher) on the Azure OpenAI resource. Without that role you will see `401`/`403` errors at the first request.
 
-> `apiBase` remains mandatory in both modes — it's your Azure resource endpoint and cannot be inferred. If neither `apiKey` is set nor `azure-identity` is installed, the provider raises a clear error pointing you at `python -m pip install 'nanobot-ai[azure]'`.
+> `apiBase` remains mandatory in both modes — it's your Azure resource endpoint and cannot be inferred. If neither `apiKey` is set nor `azure-identity` is installed, the provider raises a clear error pointing you at `nanobot plugins enable azure`.
 
 </details>
 
@@ -447,6 +449,17 @@ You can also reference `${APIFREE_API_KEY}` in `apiKey` if that is how your envi
 Bedrock uses the native `bedrock-runtime` Converse API, so it can call Bedrock model IDs such as Claude Opus 4.7, Claude Sonnet, Amazon Nova, Meta Llama, Mistral, Qwen, and other models that support Converse. It supports normal chat, streaming, tool calling, tool results, token usage, and Bedrock error metadata.
 
 This provider is for Bedrock's native Converse API, not Bedrock's OpenAI-compatible `/openai/v1` endpoint. For OpenAI-compatible Bedrock models, you can still use `custom` if you specifically want that API surface.
+
+Install Bedrock support first:
+
+```bash
+nanobot plugins enable bedrock
+```
+
+> [!NOTE]
+> If you configured Bedrock before `boto3` became an optional dependency, run
+> `nanobot plugins enable bedrock` after upgrading. Otherwise the provider will
+> fail when it first tries to create a Bedrock client.
 
 **1. Configure credentials**
 
@@ -642,20 +655,37 @@ nanobot agent -m "Reply with one short sentence."
 <details>
 <summary><b>OpenAI Codex (OAuth)</b></summary>
 
-Codex uses OAuth instead of API keys. Requires a ChatGPT Plus or Pro account. No `providers.openaiCodex` block is needed in `config.json`; `nanobot provider login` stores the OAuth session outside config.
+Codex uses OAuth instead of API keys. Requires a ChatGPT Plus or Pro account. `nanobot provider login` stores the OAuth session outside config. A `providers.openai_codex` block is optional and is only needed for provider-specific settings such as a proxy.
 
 **1. Login:**
 ```bash
 nanobot provider login openai-codex
 ```
 
-**2. Set model** (merge into `~/.nanobot/config.json`):
+If the machine running nanobot cannot open a graphical browser, copy the printed URL into a real browser. For remote SSH login, open the URL locally, then paste the final `http://localhost:1455/auth/callback?...` redirect URL back into the terminal when prompted.
+
+**2. Optional proxy** (merge into `~/.nanobot/config.json` if Codex OAuth or Codex API traffic must use a proxy):
+
+```json
+{
+  "providers": {
+    "openai_codex": {
+      "proxy": "http://127.0.0.1:7890"
+    }
+  }
+}
+```
+
+The proxy applies to Codex OAuth token refresh, interactive token exchange, and Codex Responses API requests. It does not affect other providers; configure `proxy` separately on each supported provider that needs it.
+
+**3. Set model** (merge into `~/.nanobot/config.json`):
 ```json
 {
   "modelPresets": {
     "codex": {
       "provider": "openai_codex",
-      "model": "openai-codex/gpt-5.1-codex"
+      "model": "gpt-5.1-codex",
+      "reasoningEffort": "high"
     }
   },
   "agents": {
@@ -666,7 +696,9 @@ nanobot provider login openai-codex
 }
 ```
 
-**3. Chat:**
+Use `reasoningEffort` in the preset to send a Codex reasoning effort such as `"low"`, `"medium"`, `"high"`, or another value supported by the selected model. When `provider` is explicitly `openai_codex`, the model name does not need the `openai-codex/` prefix.
+
+**4. Chat:**
 ```bash
 nanobot agent -m "Hello!"
 
@@ -685,7 +717,17 @@ nanobot agent -c ~/.nanobot-telegram/config.json -w /tmp/nanobot-telegram-test -
 <details>
 <summary><b>GitHub Copilot (OAuth)</b></summary>
 
-GitHub Copilot uses OAuth instead of API keys. Requires a [GitHub account with a plan](https://github.com/features/copilot/plans) configured. No `providers.githubCopilot` block is needed in `config.json`; `nanobot provider login` stores the OAuth session outside config.
+GitHub Copilot uses OAuth instead of API keys. Requires a [GitHub account with a plan](https://github.com/features/copilot/plans) configured. No `providers.github_copilot` block is needed in `config.json`; `nanobot provider login` stores the OAuth session outside config.
+
+For GitHub Enterprise / Copilot for Business, set the endpoint overrides you need before login:
+```bash
+export NANOBOT_GITHUB_COPILOT_CLIENT_ID="your-enterprise-client-id"
+export NANOBOT_GITHUB_DEVICE_CODE_URL="https://ghe.example/login/device/code"
+export NANOBOT_GITHUB_ACCESS_TOKEN_URL="https://ghe.example/login/oauth/access_token"
+export NANOBOT_GITHUB_USER_URL="https://api.ghe.example/user"
+export NANOBOT_COPILOT_TOKEN_URL="https://api.ghe.example/copilot_internal/v2/token"
+export NANOBOT_COPILOT_BASE_URL="https://copilot-api.ghe.example"
+```
 
 **1. Login:**
 ```bash
@@ -733,6 +775,7 @@ variable, but use separate provider keys and default base URLs:
 
 | Provider | Default API base | Model prefix accepted by nanobot |
 |----------|------------------|-----------------------------------|
+| `opencode` | `https://opencode.ai/zen/v1` | `opencode/<model-id>` |
 | `opencode_zen` | `https://opencode.ai/zen/v1` | `opencode/<model-id>` |
 | `opencode_go` | `https://opencode.ai/zen/go/v1` | `opencode-go/<model-id>` |
 
@@ -741,13 +784,13 @@ OpenCode Zen:
 ```json
 {
   "providers": {
-    "opencodeZen": {
+    "opencode": {
       "apiKey": "${OPENCODE_API_KEY}"
     }
   },
   "modelPresets": {
     "opencodeZen": {
-      "provider": "opencode_zen",
+      "provider": "opencode",
       "model": "opencode/deepseek-v4-pro"
     }
   },
@@ -758,6 +801,8 @@ OpenCode Zen:
   }
 }
 ```
+
+`providers.opencodeZen` / `provider: "opencode_zen"` still work as compatibility aliases for existing configs.
 
 OpenCode Go:
 
@@ -994,6 +1039,29 @@ Some OpenAI-compatible gateways expose request-body extensions such as vLLM guid
   }
 }
 ```
+
+If a custom OpenAI-compatible endpoint exposes a provider-specific thinking toggle, set `thinkingStyle` so nanobot can translate `reasoningEffort` into the right request body. Supported styles are `thinking_type` (`{"thinking":{"type":"enabled"}}`), `enable_thinking` (`{"enable_thinking": true}`), and `reasoning_split` (`{"reasoning_split": true}`):
+
+```json
+{
+  "providers": {
+    "companyProxy": {
+      "apiKey": "${COMPANY_PROXY_API_KEY}",
+      "apiBase": "https://api.your-provider.com/v1",
+      "thinkingStyle": "enable_thinking"
+    }
+  },
+  "modelPresets": {
+    "company": {
+      "provider": "companyProxy",
+      "model": "served-model-name",
+      "reasoningEffort": "high"
+    }
+  }
+}
+```
+
+Leave `thinkingStyle` unset unless the endpoint explicitly documents one of those wire formats. `extraBody` is still applied last, so advanced users can override the generated value.
 
 </details>
 
@@ -1467,8 +1535,8 @@ Global settings that apply to all channels. Configure under the `channels` secti
 |---------|---------|-------------|
 | `sendProgress` | `true` | Stream agent's text progress to the channel |
 | `sendToolHints` | `false` | Stream tool-call hints (e.g. `read_file("…")`) |
-| `showReasoning` | `true` | Allow channels to surface model reasoning/thinking content (DeepSeek-R1 `reasoning_content`, Anthropic `thinking_blocks`, inline `<think>` tags). Reasoning flows as a dedicated stream with `_reasoning_delta` / `_reasoning_end` markers — channels override `send_reasoning_delta` / `send_reasoning_end` to render in-place updates. Even with `true`, channels without those overrides stay no-op silently. Currently surfaced on CLI and WebSocket/WebUI (italic shimmer header, auto-collapses after the stream ends); Telegram / Slack / Discord / Feishu / WeChat / Matrix keep the base no-op until their bubble UI is adapted. Independent of `sendProgress`. |
-| `extractDocumentText` | `true` | Extract supported document/text attachments into the model prompt. Set to `false` to keep document content out of the prompt and include attachment path references instead. |
+| `showReasoning` | `true` | Allow channels to surface model reasoning/thinking content (DeepSeek-R1 `reasoning_content`, Anthropic `thinking_blocks`, inline `<think>` tags). Reasoning flows as a dedicated stream with `_reasoning_delta` / `_reasoning_end` markers — channels override `send_reasoning_delta` / `send_reasoning_end` to render in-place updates. Even with `true`, channels without those overrides stay no-op silently. Currently surfaced on CLI and WebSocket/WebUI (italic shimmer header, auto-collapses after the stream ends); Telegram / Slack / Discord / Feishu / WeChat / Matrix / Mattermost keep the base no-op until their bubble UI is adapted. Independent of `sendProgress`. |
+| `extractDocumentText` | `true` | Extract supported document/text attachments into the model prompt. Install parser dependencies with `nanobot plugins enable documents`. If you used document parsing before those parsers became optional, run that command after upgrading. Set to `false` to keep document content out of the prompt and include attachment path references instead. |
 | `sendMaxRetries` | `3` | Max delivery attempts per outbound message, including the initial send (0-10 configured, minimum 1 actual attempt) |
 
 `channels.transcriptionProvider` and `channels.transcriptionLanguage` are deprecated compatibility fields. They remain as a read-only fallback for older configs, but new configuration should use top-level `transcription.provider` and `transcription.language`.
@@ -1491,6 +1559,8 @@ Global settings that apply to all channels. Configure under the `channels` secti
   }
 }
 ```
+
+Telegram `richMessages` defaults to `false`. Enable it only to opt in to Bot API 10.1 `sendRichMessage` rendering; leave it disabled for Telegram Web clients that show unsupported-message errors for rich messages.
 
 ### Retry Behavior
 
@@ -1540,18 +1610,21 @@ nanobot uses a shared SSRF guard for built-in web fetches and HTTP/SSE MCP conne
 
 Keep whitelist entries as narrow as possible, such as a single host CIDR (`192.168.1.50/32`). The whitelist is global for the shared SSRF guard; it is not limited to one tool or one MCP server.
 
+HTTP/SSE MCP connections use the same process-wide proxy environment behavior as `web_fetch`: proxied targets use the configured proxy, and URLs excluded by `NO_PROXY` remain DNS-pinned direct connections.
+
 > [!TIP]
-> Use `proxy` in `tools.web` to route all web requests (search + fetch) through a proxy:
+> Use `proxy` in `tools.web` to route web requests through a proxy:
 > ```json
 > { "tools": { "web": { "proxy": "http://127.0.0.1:7890" } } }
 > ```
+> `web_fetch` applies DNS pinning for direct connections. When an explicit `tools.web.proxy` or a process-wide proxy environment variable applies to the target URL, nanobot still validates the requested URL locally, but DNS resolution for the outbound fetch happens at the proxy; configure only trusted proxies. URLs excluded by `NO_PROXY` keep the DNS-pinned direct path unless `tools.web.proxy` is configured.
 
 ### `tools.web`
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `enable` | boolean | `true` | Enable or disable all built-in web tools (`web_search` + `web_fetch`) |
-| `proxy` | string or null | `null` | Proxy for all web requests, for example `http://127.0.0.1:7890` |
+| `proxy` | string or null | `null` | Proxy for web requests, for example `http://127.0.0.1:7890`. `web_fetch` DNS pinning applies only to direct connections; proxied fetches rely on the configured proxy as the trusted network exit. |
 | `userAgent` | string or null | `null` | User-Agent header for all web requests. If null, a browser one will be used |
 
 ### Web Search
@@ -1694,6 +1767,22 @@ You can also set `WEB_SEARCH_API_KEY` for compatibility with the Volcengine web-
 
 Keenable search works out of the box with no account, via its token-less public endpoint (free tier, limited to 1,000 requests/hour). Set `apiKey` (or `KEENABLE_API_KEY`) from [keenable.ai](https://keenable.ai) to remove the hourly limit.
 
+**Serper** (Google Search API):
+```json
+{
+  "tools": {
+    "web": {
+      "search": {
+        "provider": "serper",
+        "apiKey": "${SERPER_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+Create a key at [serper.dev](https://serper.dev). You can also set `SERPER_API_KEY` in the environment instead of storing it in config.
+
 **SearXNG** (self-hosted, no API key needed):
 ```json
 {
@@ -1725,7 +1814,7 @@ Keenable search works out of the box with no account, via its token-less public 
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `provider` | string | `"duckduckgo"` | Search backend: `brave`, `tavily`, `jina`, `kagi`, `olostep`, `bocha`, `volcengine`, `keenable`, `searxng`, `duckduckgo` |
+| `provider` | string | `"duckduckgo"` | Search backend: `brave`, `tavily`, `jina`, `kagi`, `olostep`, `bocha`, `volcengine`, `keenable`, `serper`, `searxng`, `duckduckgo` |
 | `apiKey` | string | `""` | API key for API-backed search providers |
 | `baseUrl` | string | `""` | Base URL for SearXNG |
 | `maxResults` | integer | `5` | Results per search (1–10) |
@@ -1837,9 +1926,9 @@ Use `enabledTools` to register only a subset of tools from an MCP server:
 
 `enabledTools` accepts either the raw MCP tool name (for example `read_file`) or the wrapped nanobot tool name (for example `mcp_filesystem_write_file`).
 
-- Omit `enabledTools`, or set it to `["*"]`, to register all tools.
-- Set `enabledTools` to `[]` to register no tools from that server.
-- Set `enabledTools` to a non-empty list of names to register only that subset.
+- Omit `enabledTools`, or set it to `["*"]`, to register all capabilities (tools, resources, and prompts).
+- Set `enabledTools` to `[]` to register no tools from that server. Resources and prompts are also skipped, since they have no per-name filter.
+- Set `enabledTools` to a non-empty list of names to register only those tools — resources and prompts are not registered.
 
 MCP tools are automatically discovered and registered on startup. The LLM can use them alongside built-in tools — no extra configuration needed.
 
@@ -1861,6 +1950,7 @@ For API keys, tokens, and other secrets, see [Environment Variables for Secrets]
 | `tools.exec.timeout` | `60` | Default hard timeout in seconds for shell commands. Config values may exceed the per-call tool cap; set `0` to disable the hard timeout for trusted long-running commands. |
 | `tools.exec.pathPrepend` | `""` | Extra directories to prepend to `PATH` when running shell commands. Use this when configured tools should win executable lookup precedence, such as a Python virtual environment's `bin` or `Scripts` directory. |
 | `tools.exec.pathAppend` | `""` | Extra directories to append to `PATH` when running shell commands (e.g. `/usr/sbin` for `ufw`). |
+| `tools.webuiAllowRemotePackageInstall` | `false` | When `false`, the WebUI can install missing optional packages only from a browser opened on the same machine as nanobot. Set to `true` only when a trusted remote admin is allowed to install Python packages into this nanobot environment. |
 | `tools.ssrfWhitelist` | `[]` | CIDR ranges exempted from the shared SSRF guard used by web fetches and HTTP/SSE MCP connections. Prefer exact host CIDRs such as `192.168.1.50/32`; broad ranges increase SSRF exposure. |
 | `channels.*.allowFrom` | omitted | Access control per channel. Omit to use pairing-only mode; set `["*"]` to allow everyone; or list specific user IDs. See [Pairing](#pairing) for details. |
 
@@ -1873,7 +1963,7 @@ Pairing lets users get access to the bot through a simple code exchange — no c
 
 ### How it works
 
-1. A user sends a DM to the bot on any channel (Telegram, Discord, Slack, etc.) where they aren't yet approved.
+1. A user sends a DM to the bot on any channel (Telegram, Discord, Slack, or Mattermost) where they aren't yet approved.
 2. The bot replies with a pairing code (like `ABCD-EFGH`) and tells them to forward it to you.
 3. You approve the code:
 
@@ -1948,7 +2038,9 @@ The gateway can run a protected heartbeat cron job that periodically checks `HEA
 }
 ```
 
-If `HEARTBEAT.md` has tasks under `## Active Tasks`, the agent executes them and delivers useful results to the most recently active chat target. If the file has no active tasks, the heartbeat is skipped silently.
+If `HEARTBEAT.md` has tasks under `## Active Tasks`, the agent executes them and sends only useful/actionable results to the most recently active chat target. If the file has no active tasks, or the result is routine with nothing useful to report, the heartbeat is skipped silently.
+
+This is intentionally different from user-created cron jobs. A cron job created with the `cron` tool runs as a scheduled turn in its origin chat/session and normally delivers the result back to that channel. Use `HEARTBEAT.md` for recurring background checks that should not notify the user on every run.
 
 The heartbeat job is backed by the same cron service as user-created reminders. It is stored under the active workspace (`<workspace>/cron/jobs.json`) and shows up in `cron(action="list")` as `heartbeat`, but it is system-managed and cannot be removed with the `cron` tool. Disable it through config and restart the gateway if you do not want periodic heartbeat checks.
 
@@ -1957,6 +2049,7 @@ The heartbeat job is backed by the same cron service as user-created reminders. 
 | `gateway.heartbeat.enabled` | `true` | Register the built-in heartbeat cron job on gateway startup. |
 | `gateway.heartbeat.intervalS` | `1800` | Seconds between heartbeat checks. |
 | `gateway.heartbeat.keepRecentMessages` | `8` | Number of recent heartbeat-session messages to retain after each run. |
+| `gateway.restartMode` | `auto` | Restart strategy for `/restart`: `auto` uses `spawn` on Windows foreground runs and `exec` elsewhere. Use `exit` with Windows service wrappers such as WinSW or nssm so the service manager owns the restart. |
 
 
 ## Subagent Concurrency
@@ -1973,9 +2066,22 @@ By default, nanobot only allows one spawned subagent at a time. When the limit i
 }
 ```
 
+Subagents also stop immediately when one of their tools returns an execution error. That default keeps failures visible to the parent agent. If your subagent workflows use tools that can fail transiently and should be retried or worked around by the model, disable hard-stop behavior:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "failOnToolError": false
+    }
+  }
+}
+```
+
 | Option | Default | Description |
 |--------|---------|-------------|
 | `agents.defaults.maxConcurrentSubagents` | `1` | Maximum number of spawned subagents that may run at the same time. Attempts to spawn beyond this limit return an error. |
+| `agents.defaults.failOnToolError` | `true` | Stop a spawned subagent when a tool execution fails. Set to `false` to return tool errors to the subagent model so it can recover within the same run. |
 
 
 ## Auto Compact
