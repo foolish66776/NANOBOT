@@ -214,9 +214,7 @@ Tutti i job qui sotto devono stare nel cron Telegram perché **consegnano sempre
 
 | job name | note |
 |---|---|
-| `foolish-weekly-research` | digest settimanale |
 | `scribacchino-digest` | riassunto giornaliero |
 | `cms-packlink-check` | stato spedizioni |
 | `sebo-concept-8am` | concepts mattina |
 | `sebo-concept-4pm` | concepts pomeriggio |
-| `📸 promemoria foto prodotti` | promemoria |
