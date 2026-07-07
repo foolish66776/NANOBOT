@@ -2462,12 +2462,12 @@ if('serviceWorker' in navigator){{
                     writer.close()
                     return
                 try:
-                    cron = _json.loads(body_bytes.decode("utf-8", errors="replace"))
+                    cron_payload = _json.loads(body_bytes.decode("utf-8", errors="replace"))
 
-                    cron_name = cron.get("cron", "unknown")
-                    sent = int(cron.get("sent", 0))
-                    recipients = cron.get("recipients", [])
-                    errors = cron.get("errors", [])
+                    cron_name = cron_payload.get("cron", "unknown")
+                    sent = int(cron_payload.get("sent", 0))
+                    recipients = cron_payload.get("recipients", [])
+                    errors = cron_payload.get("errors", [])
 
                     _cron_descriptions = {
                         "abandoned_cart": "Email carrello abbandonato — clienti che hanno iniziato il checkout ma non hanno completato l'acquisto (attesa >1h)",

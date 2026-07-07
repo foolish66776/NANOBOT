@@ -3,6 +3,8 @@
 This file tracks every modification made to nanobot for the Frank deployment.
 **After every upstream merge, re-apply any patch that was overwritten and update the status here.**
 
+**Last upstream sync**: `2026-07-08` — merged `upstream/main` (197 commits, 2026-06-24 → 2026-07-07). All patches P02–P06 verified intact. See P07 for the one real conflict. Also fixed a pre-existing bug found by `ruff` (F823) in the `/hooks/foolish-storefront-cron` webhook handler in `nanobot/cli/commands.py`: a local variable named `cron` shadowed the outer `CronService` instance used by the `/hooks/foolish-storefront-order` handler, silently breaking the "verifica pipeline a +5 min" follow-up job since 2026-06-08 (the exception was swallowed by a `except Exception` and only logged as a warning).
+
 ---
 
 ## How to use after an upstream merge
@@ -151,6 +153,27 @@ Verify after merge: directory `nanobot/subconscious/` exists with all 4 files.
 - `nanobot/skills/apps/SKILL.md`
 
 Verify after merge: all 4 skill directories exist.
+
+---
+
+### P07 — WhatsApp bridge dropped in favor of upstream neonize rewrite
+**Status**: applied `2026-07-08`
+**Commit**: merge of `upstream/main` (`2a9e288d "refactor(whatsapp): replace bridge with neonize"`)
+**Decision**: upstream removed the Node.js/TypeScript bridge (`bridge/`) entirely and rewrote
+`nanobot/channels/whatsapp.py` to talk to WhatsApp Web directly via the `neonize` Python library.
+WhatsApp was already disabled on Frank (`config.channels.whatsapp.enabled: false`, systemd unit
+`nanobot-whatsapp-bridge.service` inactive), so we took upstream's version instead of keeping the
+old bridge — no working feature was lost.
+
+**Files removed** (were Frank-tracked, now gone — do not re-add):
+- `bridge/` (whole directory: `package.json`, `src/*.ts`, `tsconfig.json`)
+
+**Stale, not in git — clean up manually if/when WhatsApp gets re-enabled**:
+- `~/.nanobot/whatsapp-bridge.service` (old systemd unit file, references `bridge/dist/index.js` which no longer exists)
+- systemd user unit `nanobot-whatsapp-bridge.service` (disabled, inactive — safe to `systemctl --user disable --now` and delete)
+- `~/.nanobot/whatsapp-auth/` (old bridge's auth session — incompatible with neonize's auth format; a fresh QR pairing will be needed)
+
+**Key invariant to verify after merge**: `bridge/` directory does not exist; `nanobot/channels/whatsapp.py` imports `neonize`, not a bridge websocket client.
 
 ---
 
