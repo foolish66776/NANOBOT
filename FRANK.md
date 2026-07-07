@@ -177,6 +177,18 @@ old bridge — no working feature was lost.
 
 ---
 
+### P08 — REVERTED: local Ollama watchdog for email/order triage
+**Status**: reverted `2026-07-08`
+**Problema**: idea di usare un modello locale (Ollama) per classificare email/ordini in arrivo (URGENTE/ORDINE/SPAM) ogni 5 minuti, per risparmiare token DeepSeek su un task di triage semplice.
+**Perché è stato abbandonato**:
+- Il servizio di sistema `ollama.service` era in crash-loop da giorni (91.000+ tentativi di riavvio falliti, `mkdir /usr/share/ollama: permission denied`) — mai raggiungibile su `127.0.0.1:11434`.
+- `scripts/local-ai-watchdog.py` (rimosso) aveva `get_pending_items()` non implementato — nessun collegamento reale ad AgentMail o al CMS, solo stub. Anche con Ollama funzionante, il job non avrebbe mai classificato nulla.
+- Il cron `local-ai-watchdog` girava ogni 5 minuti come no-op silenzioso, senza che nessuno se ne accorgesse.
+**Decisione**: `ollama.service` fermato e disabilitato (richiede sudo, eseguito manualmente). Cron `local-ai-watchdog` disabilitato in `~/.nanobot/cron/jobs.json`. Script rimosso dal repo. Email/ordini/CMS tornano sotto Frank stesso, tramite i tool esistenti (`agentmail_list`, `packlink_track`) e il cron `cms-packlink-check`.
+**Se si riprova in futuro**: prima verificare che Ollama resti stabile per qualche giorno prima di costruirci sopra un job, e scrivere `get_pending_items()` per intero (non solo lo scaffold) prima di attivare il cron.
+
+---
+
 ## Architettura cron di Frank
 
 **REGOLA FONDAMENTALE — non modificare il codice se arriva spam da cron.**
