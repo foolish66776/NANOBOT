@@ -12,7 +12,7 @@ This file tracks every modification made to nanobot for the Frank deployment.
 1. Read this file in full.
 2. For each patch, check if the target file still contains the change (grep for the key symbol or function name).
 3. Re-apply any patch that was lost. Mark it `re-applied` with the date.
-4. Run `ruff check nanobot/` and restart Frank.
+4. Run `ruff check nanobot/`, verify the `EnvironmentFile=` paths in `frank.service` still exist (see P09), then restart Frank.
 
 ## Secrets and environment
 
@@ -186,6 +186,25 @@ old bridge — no working feature was lost.
 - Il cron `local-ai-watchdog` girava ogni 5 minuti come no-op silenzioso, senza che nessuno se ne accorgesse.
 **Decisione**: `ollama.service` fermato e disabilitato (richiede sudo, eseguito manualmente). Cron `local-ai-watchdog` disabilitato in `~/.nanobot/cron/jobs.json`. Script rimosso dal repo. Email/ordini/CMS tornano sotto Frank stesso, tramite i tool esistenti (`agentmail_list`, `packlink_track`) e il cron `cms-packlink-check`.
 **Se si riprova in futuro**: prima verificare che Ollama resti stabile per qualche giorno prima di costruirci sopra un job, e scrivere `get_pending_items()` per intero (non solo lo scaffold) prima di attivare il cron.
+
+---
+
+### P09 — Fixed broken systemd EnvironmentFile after .env dedup
+**Status**: applied `2026-07-08`
+**Problem**: `frank.service`'s `EnvironmentFile=` pointed at `/home/ab/.nanobot/frank.env`, a file that no longer existed — most likely deleted during an earlier `.env` duplicate cleanup this session (Frank had accidentally created a second `.env` at some point, causing secret/password confusion that was resolved separately). The unit kept running fine because Frank simply hadn't been restarted since the file went missing — systemd only reads `EnvironmentFile=` at process start. The breakage only surfaced when a routine `systemctl --user restart frank.service` was attempted (to pick up unrelated `config.json`/cron changes) and failed with `Failed to load environment files: No such file or directory`, leaving the service stuck in a crash/auto-restart loop with Frank fully down.
+**Files changed**:
+- `~/.config/systemd/user/frank.service` — replaced the single broken line with the two real files, matching the architecture already documented above under "Secrets and environment":
+```
+EnvironmentFile=/home/ab/.nanobot/.env
+EnvironmentFile=/home/ab/.config/nanobot/frank.env
+```
+Then `systemctl --user daemon-reload` before restarting.
+
+**Key invariant to verify before every `systemctl --user restart frank.service`** (not just after a merge — this can silently rot any time the `.env` files are touched):
+```bash
+grep EnvironmentFile ~/.config/systemd/user/frank.service | sed 's/EnvironmentFile=-\?//' | while read f; do test -f "$f" && echo "OK: $f" || echo "MISSING: $f"; done
+```
+If anything is missing, fix the unit file and `daemon-reload` *before* restarting — otherwise Frank goes down with `Restart=on-failure` burning through `StartLimitBurst=5` retries in `StartLimitIntervalSec=300` and then giving up entirely, with no automatic recovery.
 
 ---
 
